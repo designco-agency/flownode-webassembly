@@ -73,8 +73,14 @@ impl NodeGraph {
     }
     
     pub fn add_node(&mut self, node_type: NodeType) {
-        // Place new nodes in the center of the viewport
-        let position = Pos2::new(400.0 - self.pan_offset.x, 300.0 - self.pan_offset.y);
+        // Place new nodes in the center of the viewport with slight random offset
+        let node_count = self.nodes.len() as f32;
+        let offset_x = (node_count * 30.0) % 200.0;
+        let offset_y = (node_count * 20.0) % 150.0;
+        let position = Pos2::new(
+            (300.0 + offset_x - self.pan_offset.x) / self.zoom,
+            (200.0 + offset_y - self.pan_offset.y) / self.zoom,
+        );
         let node = Node::new(node_type, position);
         self.selected_node = Some(node.id);
         self.nodes.insert(node.id, node);
@@ -100,6 +106,9 @@ impl NodeGraph {
             let zoom_factor = 1.0 + scroll * 0.001;
             self.zoom = (self.zoom * zoom_factor).clamp(0.25, 4.0);
         }
+        
+        // Fill canvas with dark background
+        painter.rect_filled(canvas_rect, 0.0, egui::Color32::from_rgb(26, 26, 46));
         
         // Draw grid background
         self.draw_grid(&painter, canvas_rect);
