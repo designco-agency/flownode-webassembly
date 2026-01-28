@@ -432,12 +432,21 @@ impl NodeGraph {
             let slot_id = egui::Id::new((node_id, "input", i));
             let slot_response = ui.interact(slot_rect, slot_id, egui::Sense::click_and_drag());
             
+            // Check if this input has a connection
+            let has_connection = self.connections.iter().any(|c| c.to_node == node_id && c.to_slot == i);
+            
             // Highlight on hover
             let is_hovered = slot_response.hovered();
             let radius = if is_hovered { slot_radius * 1.3 } else { slot_radius };
             
-            // Slot circle
-            painter.circle_filled(slot_pos, radius, input.slot_type.color());
+            // Slot circle - filled if connected, hollow if not
+            if has_connection {
+                painter.circle_filled(slot_pos, radius, input.slot_type.color());
+            } else {
+                painter.circle_stroke(slot_pos, radius, egui::Stroke::new(2.0, input.slot_type.color()));
+                // Small dot in center
+                painter.circle_filled(slot_pos, radius * 0.3, input.slot_type.color());
+            }
             if is_hovered {
                 painter.circle_stroke(slot_pos, radius + 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
             }
@@ -450,9 +459,6 @@ impl NodeGraph {
                 egui::FontId::proportional(12.0 * self.zoom),
                 egui::Color32::GRAY,
             );
-            
-            // Check if this input already has a connection
-            let has_connection = self.connections.iter().any(|c| c.to_node == node_id && c.to_slot == i);
             
             // Handle connection drop on input slot
             if slot_response.hovered() && ui.input(|i| i.pointer.any_released()) {
@@ -493,12 +499,20 @@ impl NodeGraph {
             let slot_id = egui::Id::new((node_id, "output", i));
             let slot_response = ui.interact(slot_rect, slot_id, egui::Sense::click_and_drag());
             
+            // Check if this output has connections
+            let has_connection = self.connections.iter().any(|c| c.from_node == node_id && c.from_slot == i);
+            
             // Highlight on hover
             let is_hovered = slot_response.hovered();
             let radius = if is_hovered { slot_radius * 1.3 } else { slot_radius };
             
-            // Slot circle
-            painter.circle_filled(slot_pos, radius, output.slot_type.color());
+            // Slot circle - filled if connected, hollow if not
+            if has_connection {
+                painter.circle_filled(slot_pos, radius, output.slot_type.color());
+            } else {
+                painter.circle_stroke(slot_pos, radius, egui::Stroke::new(2.0, output.slot_type.color()));
+                painter.circle_filled(slot_pos, radius * 0.3, output.slot_type.color());
+            }
             if is_hovered {
                 painter.circle_stroke(slot_pos, radius + 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
             }
