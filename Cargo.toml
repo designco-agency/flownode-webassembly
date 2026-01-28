@@ -20,8 +20,8 @@ egui_extras = { version = "0.30", features = ["all_loaders", "image"] }
 # Note: egui_node_graph was yanked, using custom implementation in graph.rs
 # Alternative options: egui_node_editor, egui_node_graph2, egui-graph-edit
 
-# Image processing
-image = "0.25"
+# Image processing (no rayon/threads for WASM compatibility)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 # GPU compute
 wgpu = "24"
