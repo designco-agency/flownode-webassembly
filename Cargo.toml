@@ -35,7 +35,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # UUID for node identification
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.0", features = ["v4", "serde", "js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Native file dialogs

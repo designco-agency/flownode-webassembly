@@ -34,6 +34,8 @@ fn main() -> eframe::Result<()> {
 // WASM entry point
 #[cfg(target_arch = "wasm32")]
 fn main() {
+    use eframe::wasm_bindgen::JsCast;
+    
     // Redirect panics to console.error
     console_error_panic_hook::set_once();
     
@@ -43,21 +45,28 @@ fn main() {
     let web_options = eframe::WebOptions::default();
     
     wasm_bindgen_futures::spawn_local(async {
+        // Get the canvas element
+        let document = web_sys::window()
+            .expect("No window")
+            .document()
+            .expect("No document");
+        
+        let canvas = document
+            .get_element_by_id("the_canvas_id")
+            .expect("Failed to find canvas element")
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .expect("Element is not a canvas");
+        
         let start_result = eframe::WebRunner::new()
             .start(
-                "the_canvas_id",
+                canvas,
                 web_options,
                 Box::new(|cc| Ok(Box::new(FlowNodeApp::new(cc)))),
             )
             .await;
         
-        // Hide loading screen
-        if let Some(window) = web_sys::window() {
-            let _ = js_sys::Reflect::get(&window, &"hideLoading".into())
-                .ok()
-                .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
-                .map(|f| f.call0(&window));
-        }
+        // Hide loading screen via JS
+        let _ = js_sys::eval("document.getElementById('loading')?.classList.add('hidden')");
         
         if let Err(e) = start_result {
             log::error!("Failed to start eframe: {:?}", e);
