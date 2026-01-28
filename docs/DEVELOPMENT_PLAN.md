@@ -29,22 +29,22 @@
 
 ## 🗺️ Development Phases
 
-### Phase 1: Core Editing Nodes ⬅️ CURRENT
+### Phase 1: Core Editing Nodes ⬅️ IN PROGRESS
 Match the `adjust` and `effects` nodes exactly.
 
-#### 1.1 ImageAdjustNode
-- [ ] Rename `BrightnessContrast` → `adjust`
-- [ ] Add all 10 basic sliders:
-  - [ ] brightness (-100 to 100)
-  - [ ] contrast (-100 to 100)
-  - [ ] saturation (-100 to 100)
-  - [ ] exposure (-100 to 100)
-  - [ ] highlights (-100 to 100)
-  - [ ] shadows (-100 to 100)
-  - [ ] temperature (-100 to 100)
-  - [ ] tint (-100 to 100)
-  - [ ] vibrance (-100 to 100)
-  - [ ] gamma (-100 to 100 → maps to 0.1-3.0)
+#### 1.1 ImageAdjustNode ✅ BASIC COMPLETE
+- [x] Rename `BrightnessContrast` → `adjust`
+- [x] Add all 10 basic sliders:
+  - [x] brightness (-100 to 100)
+  - [x] contrast (-100 to 100)
+  - [x] saturation (-100 to 100)
+  - [x] exposure (-100 to 100)
+  - [x] highlights (-100 to 100)
+  - [x] shadows (-100 to 100)
+  - [x] temperature (-100 to 100)
+  - [x] tint (-100 to 100)
+  - [x] vibrance (-100 to 100)
+  - [x] gamma (-100 to 100 → maps to 0.1-3.0)
 - [ ] Color grading wheels:
   - [ ] Lift (shadows)
   - [ ] Gamma (midtones)
@@ -56,30 +56,30 @@ Match the `adjust` and `effects` nodes exactly.
   - [ ] hueRotation (-180 to 180)
   - [ ] luminanceMix (0 to 100)
 
-#### 1.2 EffectsNode
-- [ ] Rename `Blur` → `effects`
-- [ ] Blur effects:
-  - [ ] gaussianBlur (0-100)
-  - [ ] directionalBlur (0-100)
-  - [ ] directionalBlurAngle (0-360)
-  - [ ] progressiveBlur (0-100)
-  - [ ] progressiveBlurDirection (top/bottom/left/right)
-  - [ ] progressiveBlurFalloff (0-100)
-- [ ] Glass blinds:
-  - [ ] glassBlinds (0-100)
-  - [ ] glassBlindsFrequency (1-50)
-  - [ ] glassBlindsAngle (0-360)
-  - [ ] glassBlindsPhase (0-100)
-- [ ] Grain:
-  - [ ] grain (0-100)
-  - [ ] grainSize (1-10)
-  - [ ] grainMonochrome (bool)
-  - [ ] grainSeed (number)
-- [ ] Other:
-  - [ ] sharpen (0-100)
-  - [ ] vignette (0-100)
-  - [ ] vignetteRoundness (0-100)
-  - [ ] vignetteSmoothness (0-100)
+#### 1.2 EffectsNode ✅ UI COMPLETE (Processing partial)
+- [x] Rename `Blur` → `effects`
+- [x] Blur effects:
+  - [x] gaussianBlur (0-100) ✅ Processing done
+  - [x] directionalBlur (0-100) - UI only
+  - [x] directionalBlurAngle (0-360) - UI only
+  - [x] progressiveBlur (0-100) - UI only
+  - [x] progressiveBlurDirection (top/bottom/left/right)
+  - [x] progressiveBlurFalloff (0-100)
+- [x] Glass blinds:
+  - [x] glassBlinds (0-100) - UI only
+  - [x] glassBlindsFrequency (1-50)
+  - [x] glassBlindsAngle (0-360)
+  - [x] glassBlindsPhase (0-100)
+- [x] Grain:
+  - [x] grain (0-100) ✅ Processing done
+  - [x] grainSize (1-10)
+  - [x] grainMonochrome (bool)
+  - [x] grainSeed (number)
+- [x] Other:
+  - [x] sharpen (0-100) ✅ Processing done
+  - [x] vignette (0-100) ✅ Processing done
+  - [x] vignetteRoundness (0-100)
+  - [x] vignetteSmoothness (0-100)
 
 ### Phase 2: Node Types
 Add remaining content/utility nodes.
@@ -222,7 +222,13 @@ Fallback to CPU for browsers without WebGPU.
 - ✅ Sub-agent audited React codebase
 - ✅ Created REACT_SPEC.md (27KB)
 - ✅ Created this development plan
-- 🔄 Starting Phase 1: Core editing nodes
+- ✅ **Major Refactor:** Restructured to match React spec exactly
+  - 26 node types (all React types)
+  - Adjust node: 10 sliders + color boost/hue/luminance
+  - Effects node: All 17 parameters in UI
+  - All keyboard shortcuts matching React
+  - React Flow JSON format compatibility
+- 🔄 Next: Color wheels, remaining effect processing, cloud sync
 
 ---
 
