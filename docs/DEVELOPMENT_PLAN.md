@@ -228,7 +228,16 @@ Fallback to CPU for browsers without WebGPU.
   - Effects node: All 17 parameters in UI
   - All keyboard shortcuts matching React
   - React Flow JSON format compatibility
-- 🔄 Next: Color wheels, remaining effect processing, cloud sync
+- ✅ **All Effects Processing:** Directional blur, progressive blur, glass blinds, advanced grain
+- ✅ **Color Grading Wheels:** Interactive Lift/Gamma/Gain/Offset with processing
+- ✅ **Copy/Paste/Duplicate:** Ctrl+C/V/D shortcuts
+
+**Stats:**
+- 3,986 lines of Rust
+- 29 commits
+- ~4MB WASM binary
+
+**Next:** Supabase cloud sync
 
 ---
 
