@@ -1,11 +1,14 @@
 //! Compatibility layer for FlowNode.io React Flow format
+//! 
+//! This module handles conversion between WASM internal format
+//! and the React Flow JSON format used by FlowNode.io
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-use eframe::egui::{Vec2, Pos2};
+use eframe::egui::Vec2;
 
-use crate::nodes::{Node, NodeType, NodeProperties, BlurType, BlendMode};
+use crate::nodes::{Node, NodeType, NodeProperties, BlendMode, BlurDirection, ColorWheel};
 use crate::graph::{NodeGraph, Connection};
 
 /// React Flow compatible node format
@@ -18,26 +21,24 @@ pub struct ReactFlowNode {
     pub data: serde_json::Value,
 }
 
-/// React Flow position
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
     pub x: f32,
     pub y: f32,
 }
 
-/// React Flow edge (connection)
+/// React Flow compatible edge format
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReactFlowEdge {
     pub id: String,
     pub source: String,
     pub target: String,
-    #[serde(rename = "sourceHandle", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceHandle")]
     pub source_handle: Option<String>,
-    #[serde(rename = "targetHandle", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetHandle")]
     pub target_handle: Option<String>,
 }
 
-/// React Flow viewport
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Viewport {
     pub x: f32,
@@ -45,38 +46,37 @@ pub struct Viewport {
     pub zoom: f32,
 }
 
-/// Full React Flow compatible workflow
+/// Complete React Flow workflow format
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReactFlowWorkflow {
     pub nodes: Vec<ReactFlowNode>,
     pub edges: Vec<ReactFlowEdge>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub viewport: Option<Viewport>,
+    pub viewport: Viewport,
 }
 
 impl ReactFlowWorkflow {
-    /// Convert from internal NodeGraph format
+    /// Convert from internal NodeGraph format to React Flow format
     pub fn from_graph(graph: &NodeGraph, pan: Vec2, zoom: f32) -> Self {
         let nodes: Vec<ReactFlowNode> = graph.nodes_iter()
-            .map(|(id, node)| {
-                let data = node_to_data(node);
+            .map(|(_, node)| {
                 ReactFlowNode {
-                    id: id.to_string(),
+                    id: node.id.to_string(),
                     node_type: node_type_to_string(&node.node_type),
                     position: Position {
                         x: node.position.x,
                         y: node.position.y,
                     },
-                    data,
+                    data: node_to_data(node),
                 }
             })
             .collect();
         
         let edges: Vec<ReactFlowEdge> = graph.connections_iter()
-            .enumerate()
-            .map(|(i, conn)| {
+            .map(|conn| {
                 ReactFlowEdge {
-                    id: format!("edge-{}", i),
+                    id: format!("e-{}-{}-{}-{}", 
+                        conn.from_node, conn.from_slot, 
+                        conn.to_node, conn.to_slot),
                     source: conn.from_node.to_string(),
                     target: conn.to_node.to_string(),
                     source_handle: Some(format!("output-{}", conn.from_slot)),
@@ -85,186 +85,287 @@ impl ReactFlowWorkflow {
             })
             .collect();
         
-        ReactFlowWorkflow {
+        Self {
             nodes,
             edges,
-            viewport: Some(Viewport {
+            viewport: Viewport {
                 x: pan.x,
                 y: pan.y,
                 zoom,
-            }),
+            },
         }
     }
     
-    /// Convert to internal NodeGraph format
+    /// Convert React Flow format to internal NodeGraph
     pub fn to_graph(&self) -> Result<(NodeGraph, Vec2, f32), String> {
-        let mut nodes = HashMap::new();
+        let mut nodes: HashMap<Uuid, Node> = HashMap::new();
+        let mut connections: Vec<Connection> = Vec::new();
+        let mut id_map: HashMap<String, Uuid> = HashMap::new();
         
+        // First pass: create nodes
         for rf_node in &self.nodes {
-            let id = Uuid::parse_str(&rf_node.id)
-                .map_err(|e| format!("Invalid node ID: {}", e))?;
-            
             let node_type = string_to_node_type(&rf_node.node_type)?;
-            let properties = data_to_properties(&rf_node.data, &node_type);
+            let uuid = Uuid::new_v4();
+            id_map.insert(rf_node.id.clone(), uuid);
             
-            let node = Node {
-                id,
-                node_type,
-                position: Pos2::new(rf_node.position.x, rf_node.position.y),
-                properties,
-            };
+            let mut node = Node::new(node_type, Vec2::new(rf_node.position.x, rf_node.position.y));
+            node.id = uuid;
+            node.properties = data_to_properties(&rf_node.data, &node_type);
             
-            nodes.insert(id, node);
+            nodes.insert(uuid, node);
         }
         
-        let mut connections = Vec::new();
-        for rf_edge in &self.edges {
-            let from_node = Uuid::parse_str(&rf_edge.source)
-                .map_err(|e| format!("Invalid source ID: {}", e))?;
-            let to_node = Uuid::parse_str(&rf_edge.target)
-                .map_err(|e| format!("Invalid target ID: {}", e))?;
+        // Second pass: create connections
+        for edge in &self.edges {
+            let from_id = id_map.get(&edge.source)
+                .ok_or_else(|| format!("Unknown source node: {}", edge.source))?;
+            let to_id = id_map.get(&edge.target)
+                .ok_or_else(|| format!("Unknown target node: {}", edge.target))?;
             
-            // Parse handle indices
-            let from_slot = rf_edge.source_handle
+            let from_slot = edge.source_handle
                 .as_ref()
                 .and_then(|h| h.strip_prefix("output-"))
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
             
-            let to_slot = rf_edge.target_handle
+            let to_slot = edge.target_handle
                 .as_ref()
                 .and_then(|h| h.strip_prefix("input-"))
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
             
             connections.push(Connection {
-                from_node,
+                from_node: *from_id,
                 from_slot,
-                to_node,
+                to_node: *to_id,
                 to_slot,
             });
         }
         
-        let (pan, zoom) = self.viewport
-            .as_ref()
-            .map(|v| (Vec2::new(v.x, v.y), v.zoom))
-            .unwrap_or((Vec2::ZERO, 1.0));
+        let pan = Vec2::new(self.viewport.x, self.viewport.y);
+        let zoom = self.viewport.zoom;
         
-        let graph = NodeGraph::from_parts(nodes, connections);
-        
-        Ok((graph, pan, zoom))
+        Ok((NodeGraph::from_parts(nodes, connections), pan, zoom))
     }
 }
 
 /// Convert node type enum to React Flow string
 fn node_type_to_string(node_type: &NodeType) -> String {
     match node_type {
-        NodeType::ImageInput => "image".to_string(),
-        NodeType::Color => "color".to_string(),
-        NodeType::Number => "number".to_string(),
-        NodeType::BrightnessContrast => "image".to_string(), // Processing node
-        NodeType::HueSaturation => "image".to_string(),
-        NodeType::Levels => "image".to_string(),
-        NodeType::Blur => "image".to_string(),
-        NodeType::Sharpen => "image".to_string(),
-        NodeType::Noise => "image".to_string(),
-        NodeType::Invert => "image".to_string(),
-        NodeType::Grayscale => "image".to_string(),
-        NodeType::Blend => "image".to_string(),
-        NodeType::Mask => "image".to_string(),
-        NodeType::Output => "image".to_string(),
+        NodeType::Image => "image".to_string(),
+        NodeType::Content => "content".to_string(),
+        NodeType::Bucket => "bucket".to_string(),
+        NodeType::Adjust => "adjust".to_string(),
+        NodeType::Effects => "effects".to_string(),
+        NodeType::Text => "text".to_string(),
+        NodeType::Concat => "concat".to_string(),
+        NodeType::Splitter => "splitter".to_string(),
+        NodeType::Postit => "postit".to_string(),
+        NodeType::Compare => "compare".to_string(),
+        NodeType::Composition => "composition".to_string(),
+        NodeType::Router => "router".to_string(),
+        NodeType::Batch => "batch".to_string(),
+        NodeType::Title => "title".to_string(),
+        NodeType::Group => "group".to_string(),
+        NodeType::Folder => "folder".to_string(),
+        NodeType::Convertor => "convertor".to_string(),
+        NodeType::Omni => "omni".to_string(),
+        NodeType::Llm => "llm".to_string(),
+        NodeType::Video => "video".to_string(),
+        NodeType::Upscaler => "upscaler".to_string(),
+        NodeType::Vector => "vector".to_string(),
+        NodeType::Rodin3d => "rodin3d".to_string(),
+        NodeType::MindMap => "mind-map".to_string(),
     }
 }
 
 /// Convert React Flow type string to node type enum
 fn string_to_node_type(type_str: &str) -> Result<NodeType, String> {
     match type_str {
-        "image" | "content" => Ok(NodeType::ImageInput), // Will be refined based on data
-        "color" => Ok(NodeType::Color),
-        "number" => Ok(NodeType::Number),
-        _ => Ok(NodeType::ImageInput), // Default fallback
+        "image" => Ok(NodeType::Image),
+        "content" => Ok(NodeType::Content),
+        "bucket" => Ok(NodeType::Bucket),
+        "adjust" => Ok(NodeType::Adjust),
+        "effects" => Ok(NodeType::Effects),
+        "text" => Ok(NodeType::Text),
+        "concat" => Ok(NodeType::Concat),
+        "splitter" => Ok(NodeType::Splitter),
+        "postit" => Ok(NodeType::Postit),
+        "compare" => Ok(NodeType::Compare),
+        "composition" => Ok(NodeType::Composition),
+        "router" => Ok(NodeType::Router),
+        "batch" => Ok(NodeType::Batch),
+        "title" => Ok(NodeType::Title),
+        "group" => Ok(NodeType::Group),
+        "folder" => Ok(NodeType::Folder),
+        "convertor" => Ok(NodeType::Convertor),
+        "omni" => Ok(NodeType::Omni),
+        "llm" => Ok(NodeType::Llm),
+        "video" => Ok(NodeType::Video),
+        "upscaler" => Ok(NodeType::Upscaler),
+        "vector" => Ok(NodeType::Vector),
+        "rodin3d" => Ok(NodeType::Rodin3d),
+        "mind-map" => Ok(NodeType::MindMap),
+        _ => Err(format!("Unknown node type: {}", type_str)),
     }
 }
 
-/// Convert node to JSON data
+/// Convert internal node to React Flow data field
 fn node_to_data(node: &Node) -> serde_json::Value {
-    let mut data = serde_json::Map::new();
-    data.insert("label".to_string(), serde_json::Value::String(node.node_type.name().to_string()));
-    
-    // Add processing info based on properties enum variant
     match &node.properties {
-        NodeProperties::BrightnessContrast { brightness, contrast } => {
-            let mut processing = serde_json::Map::new();
-            processing.insert("type".to_string(), "brightness_contrast".into());
-            processing.insert("brightness".to_string(), (*brightness).into());
-            processing.insert("contrast".to_string(), (*contrast).into());
-            data.insert("processing".to_string(), serde_json::Value::Object(processing));
+        NodeProperties::Image { image, .. } => {
+            serde_json::json!({
+                "image": image,
+                "label": node.label.as_deref().unwrap_or("Image")
+            })
         }
-        NodeProperties::HueSaturation { hue, saturation, lightness } => {
-            let mut processing = serde_json::Map::new();
-            processing.insert("type".to_string(), "hue_saturation".into());
-            processing.insert("hue".to_string(), (*hue).into());
-            processing.insert("saturation".to_string(), (*saturation).into());
-            processing.insert("lightness".to_string(), (*lightness).into());
-            data.insert("processing".to_string(), serde_json::Value::Object(processing));
+        
+        NodeProperties::Adjust { 
+            brightness, contrast, saturation, exposure,
+            highlights, shadows, temperature, tint,
+            vibrance, gamma, color_boost, hue_rotation, luminance_mix, ..
+        } => {
+            serde_json::json!({
+                "label": "Adjust",
+                "settings": {
+                    "brightness": brightness,
+                    "contrast": contrast,
+                    "saturation": saturation,
+                    "exposure": exposure,
+                    "highlights": highlights,
+                    "shadows": shadows,
+                    "temperature": temperature,
+                    "tint": tint,
+                    "vibrance": vibrance,
+                    "gamma": gamma,
+                    "colorBoost": color_boost,
+                    "hueRotation": hue_rotation,
+                    "luminanceMix": luminance_mix
+                }
+            })
         }
-        NodeProperties::Blur { radius, blur_type } => {
-            let mut processing = serde_json::Map::new();
-            processing.insert("type".to_string(), "blur".into());
-            processing.insert("radius".to_string(), (*radius).into());
-            processing.insert("blur_type".to_string(), match blur_type {
-                BlurType::Gaussian => "gaussian",
-                BlurType::Box => "box",
-                BlurType::Motion => "motion",
-            }.into());
-            data.insert("processing".to_string(), serde_json::Value::Object(processing));
+        
+        NodeProperties::Effects {
+            gaussian_blur, directional_blur, directional_blur_angle,
+            progressive_blur, progressive_blur_direction, progressive_blur_falloff,
+            glass_blinds, glass_blinds_frequency, glass_blinds_angle, glass_blinds_phase,
+            grain, grain_size, grain_monochrome, grain_seed,
+            sharpen, vignette, vignette_roundness, vignette_smoothness
+        } => {
+            serde_json::json!({
+                "label": "Effects",
+                "settings": {
+                    "gaussianBlur": gaussian_blur,
+                    "directionalBlur": directional_blur,
+                    "directionalBlurAngle": directional_blur_angle,
+                    "progressiveBlur": progressive_blur,
+                    "progressiveBlurDirection": format!("{:?}", progressive_blur_direction).to_lowercase(),
+                    "progressiveBlurFalloff": progressive_blur_falloff,
+                    "glassBlinds": glass_blinds,
+                    "glassBlindsFrequency": glass_blinds_frequency,
+                    "glassBlindsAngle": glass_blinds_angle,
+                    "glassBlindsPhase": glass_blinds_phase,
+                    "grain": grain,
+                    "grainSize": grain_size,
+                    "grainMonochrome": grain_monochrome,
+                    "grainSeed": grain_seed,
+                    "sharpen": sharpen,
+                    "vignette": vignette,
+                    "vignetteRoundness": vignette_roundness,
+                    "vignetteSmoothness": vignette_smoothness
+                }
+            })
         }
-        NodeProperties::Color { color } => {
-            data.insert("color".to_string(), serde_json::json!(color));
+        
+        NodeProperties::Text { text } => {
+            serde_json::json!({ "text": text })
         }
-        NodeProperties::Number { value, min, max } => {
-            data.insert("value".to_string(), (*value).into());
-            data.insert("min".to_string(), (*min).into());
-            data.insert("max".to_string(), (*max).into());
+        
+        NodeProperties::Omni { model, prompt, negative_prompt, seed } => {
+            serde_json::json!({
+                "model": model,
+                "prompt": prompt,
+                "negativePrompt": negative_prompt,
+                "seed": seed
+            })
         }
-        _ => {}
+        
+        // Default for other types
+        _ => {
+            serde_json::json!({
+                "label": node.node_type.name()
+            })
+        }
     }
-    
-    serde_json::Value::Object(data)
 }
 
-/// Convert JSON data to node properties
+/// Convert React Flow data field to internal properties
 fn data_to_properties(data: &serde_json::Value, node_type: &NodeType) -> NodeProperties {
-    // Start with default for the type
-    let mut props = NodeProperties::for_type(*node_type);
-    
-    // Override with data from JSON if present
-    if let Some(processing) = data.get("processing") {
-        match node_type {
-            NodeType::BrightnessContrast => {
-                let brightness = processing.get("brightness").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let contrast = processing.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                props = NodeProperties::BrightnessContrast { brightness, contrast };
+    match node_type {
+        NodeType::Image => {
+            NodeProperties::Image {
+                image: data.get("image").and_then(|v| v.as_str()).map(String::from),
+                thumbnail: None,
+                history: Vec::new(),
+                texture_id: None,
             }
-            NodeType::HueSaturation => {
-                let hue = processing.get("hue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let saturation = processing.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let lightness = processing.get("lightness").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                props = NodeProperties::HueSaturation { hue, saturation, lightness };
-            }
-            NodeType::Blur => {
-                let radius = processing.get("radius").and_then(|v| v.as_f64()).unwrap_or(5.0) as f32;
-                let blur_type_str = processing.get("blur_type").and_then(|v| v.as_str()).unwrap_or("gaussian");
-                let blur_type = match blur_type_str {
-                    "box" => BlurType::Box,
-                    "motion" => BlurType::Motion,
-                    _ => BlurType::Gaussian,
-                };
-                props = NodeProperties::Blur { radius, blur_type };
-            }
-            _ => {}
         }
+        
+        NodeType::Adjust => {
+            let settings = data.get("settings").unwrap_or(data);
+            NodeProperties::Adjust {
+                brightness: settings.get("brightness").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                contrast: settings.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                saturation: settings.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                exposure: settings.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                highlights: settings.get("highlights").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                shadows: settings.get("shadows").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                temperature: settings.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                tint: settings.get("tint").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                vibrance: settings.get("vibrance").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                gamma: settings.get("gamma").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                lift: ColorWheel::default(),
+                gamma_wheel: ColorWheel::default(),
+                gain: ColorWheel::default(),
+                offset: ColorWheel::default(),
+                color_boost: settings.get("colorBoost").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                hue_rotation: settings.get("hueRotation").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                luminance_mix: settings.get("luminanceMix").and_then(|v| v.as_f64()).unwrap_or(100.0) as f32,
+                curves_enabled: false,
+            }
+        }
+        
+        NodeType::Effects => {
+            let settings = data.get("settings").unwrap_or(data);
+            NodeProperties::Effects {
+                gaussian_blur: settings.get("gaussianBlur").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                directional_blur: settings.get("directionalBlur").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                directional_blur_angle: settings.get("directionalBlurAngle").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                progressive_blur: settings.get("progressiveBlur").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                progressive_blur_direction: BlurDirection::Bottom, // TODO: Parse from string
+                progressive_blur_falloff: settings.get("progressiveBlurFalloff").and_then(|v| v.as_f64()).unwrap_or(50.0) as f32,
+                glass_blinds: settings.get("glassBlinds").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                glass_blinds_frequency: settings.get("glassBlindsFrequency").and_then(|v| v.as_f64()).unwrap_or(10.0) as f32,
+                glass_blinds_angle: settings.get("glassBlindsAngle").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                glass_blinds_phase: settings.get("glassBlindsPhase").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                grain: settings.get("grain").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                grain_size: settings.get("grainSize").and_then(|v| v.as_f64()).unwrap_or(2.0) as f32,
+                grain_monochrome: settings.get("grainMonochrome").and_then(|v| v.as_bool()).unwrap_or(true),
+                grain_seed: settings.get("grainSeed").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                sharpen: settings.get("sharpen").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                vignette: settings.get("vignette").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                vignette_roundness: settings.get("vignetteRoundness").and_then(|v| v.as_f64()).unwrap_or(50.0) as f32,
+                vignette_smoothness: settings.get("vignetteSmoothness").and_then(|v| v.as_f64()).unwrap_or(50.0) as f32,
+            }
+        }
+        
+        NodeType::Text => {
+            NodeProperties::Text {
+                text: data.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            }
+        }
+        
+        // Default: use for_type
+        _ => NodeProperties::for_type(*node_type),
     }
-    
-    props
 }

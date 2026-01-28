@@ -110,7 +110,7 @@ impl FlowNodeApp {
                 
                 self.set_status(&msg);
                 
-                // Assign to selected node if it's an ImageInput, otherwise create new
+                // Assign to selected node if it's an Image node, otherwise create new
                 if let Some(node_id) = self.graph.selected_node() {
                     if self.graph.set_node_image(node_id, image_id) {
                         log::info!("Assigned image to selected node");
@@ -119,7 +119,7 @@ impl FlowNodeApp {
                 }
                 
                 // Create a new ImageInput node with this image
-                let node_id = self.graph.add_node(crate::nodes::NodeType::ImageInput);
+                let node_id = self.graph.add_node(crate::nodes::NodeType::Image);
                 self.graph.set_node_image(node_id, image_id);
                 log::info!("Created new ImageInput node with image");
             }
@@ -163,6 +163,75 @@ impl FlowNodeApp {
                     log::error!("Failed to encode PNG: {}", e);
                 }
             }
+        }
+    }
+    
+    /// Handle keyboard shortcuts - matches React app
+    fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
+        use crate::nodes::NodeType;
+        
+        ctx.input(|i| {
+            // Only handle shortcuts when no text input is focused
+            // Note: Could use i.events to check for text focus, but skipping for now
+            
+            let ctrl = i.modifiers.ctrl || i.modifiers.command;
+            let shift = i.modifiers.shift;
+            
+            // === Editor shortcuts ===
+            
+            // Ctrl+G = Run graph (like Execute in React)
+            if ctrl && i.key_pressed(egui::Key::G) && !shift {
+                // Will call run_graph after this closure
+            }
+            
+            // Escape = Deselect / cancel
+            if i.key_pressed(egui::Key::Escape) {
+                self.graph.deselect_all();
+            }
+            
+            // Delete/Backspace = Delete selected
+            if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
+                self.graph.delete_selected();
+            }
+            
+            // === Node creation shortcuts (single key, no modifiers) ===
+            if !ctrl && !shift {
+                // Content nodes
+                if i.key_pressed(egui::Key::I) { self.graph.add_node(NodeType::Image); }
+                if i.key_pressed(egui::Key::K) { self.graph.add_node(NodeType::Content); }
+                if i.key_pressed(egui::Key::B) { self.graph.add_node(NodeType::Bucket); }
+                
+                // Editing nodes
+                if i.key_pressed(egui::Key::A) { self.graph.add_node(NodeType::Adjust); }
+                if i.key_pressed(egui::Key::E) { self.graph.add_node(NodeType::Effects); }
+                if i.key_pressed(egui::Key::C) { self.graph.add_node(NodeType::Compare); }
+                if i.key_pressed(egui::Key::F) { self.graph.add_node(NodeType::Composition); }
+                
+                // Text nodes
+                if i.key_pressed(egui::Key::T) { self.graph.add_node(NodeType::Text); }
+                if i.key_pressed(egui::Key::J) { self.graph.add_node(NodeType::Concat); }
+                if i.key_pressed(egui::Key::S) { self.graph.add_node(NodeType::Splitter); }
+                if i.key_pressed(egui::Key::N) { self.graph.add_node(NodeType::Postit); }
+                
+                // Utility nodes
+                if i.key_pressed(egui::Key::R) { self.graph.add_node(NodeType::Router); }
+                if i.key_pressed(egui::Key::Q) { self.graph.add_node(NodeType::Batch); }
+                if i.key_pressed(egui::Key::H) { self.graph.add_node(NodeType::Title); }
+                
+                // AI nodes
+                if i.key_pressed(egui::Key::O) { self.graph.add_node(NodeType::Omni); }
+                if i.key_pressed(egui::Key::L) { self.graph.add_node(NodeType::Llm); }
+                if i.key_pressed(egui::Key::D) { self.graph.add_node(NodeType::Video); }
+                if i.key_pressed(egui::Key::U) { self.graph.add_node(NodeType::Upscaler); }
+                if i.key_pressed(egui::Key::V) { self.graph.add_node(NodeType::Vector); }
+                if i.key_pressed(egui::Key::M) { self.graph.add_node(NodeType::MindMap); }
+                if i.key_pressed(egui::Key::Num3) { self.graph.add_node(NodeType::Rodin3d); }
+            }
+        });
+        
+        // Run graph with Ctrl+G
+        if ctx.input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::G)) {
+            self.run_graph(ctx);
         }
     }
     
@@ -297,70 +366,83 @@ impl eframe::App for FlowNodeApp {
                     ui.heading("Nodes");
                     ui.separator();
                     
-                    egui::CollapsingHeader::new("📥 Input")
+                    // Node library organized like React app
+                    egui::CollapsingHeader::new("📷 Content")
                         .default_open(true)
                         .show(ui, |ui| {
-                            if ui.button("Image Input").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::ImageInput);
+                            if ui.button("Image (I)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Image);
                             }
-                            if ui.button("Color").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Color);
+                            if ui.button("Content (K)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Content);
                             }
-                            if ui.button("Number").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Number);
+                            if ui.button("Bucket (B)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Bucket);
                             }
                         });
                     
-                    egui::CollapsingHeader::new("🎨 Adjustments")
+                    egui::CollapsingHeader::new("🎨 Editing")
                         .default_open(true)
                         .show(ui, |ui| {
-                            if ui.button("Brightness/Contrast").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::BrightnessContrast);
+                            if ui.button("Adjust (A)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Adjust);
                             }
-                            if ui.button("Hue/Saturation").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::HueSaturation);
+                            if ui.button("Effects (E)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Effects);
                             }
-                            if ui.button("Levels").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Levels);
+                            if ui.button("Compare (C)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Compare);
+                            }
+                            if ui.button("Composition (F)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Composition);
                             }
                         });
                     
-                    egui::CollapsingHeader::new("🔧 Filters")
-                        .default_open(true)
+                    egui::CollapsingHeader::new("📝 Text")
+                        .default_open(false)
                         .show(ui, |ui| {
-                            if ui.button("Blur").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Blur);
+                            if ui.button("Text (T)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Text);
                             }
-                            if ui.button("Sharpen").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Sharpen);
+                            if ui.button("Concat (J)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Concat);
                             }
-                            if ui.button("Noise").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Noise);
+                            if ui.button("Splitter (S)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Splitter);
                             }
-                            if ui.button("Invert").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Invert);
-                            }
-                            if ui.button("Grayscale").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Grayscale);
+                            if ui.button("Post-It (N)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Postit);
                             }
                         });
                     
-                    egui::CollapsingHeader::new("🔀 Combine")
-                        .default_open(true)
+                    egui::CollapsingHeader::new("🔧 Utility")
+                        .default_open(false)
                         .show(ui, |ui| {
-                            if ui.button("Blend").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Blend);
+                            if ui.button("Router (R)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Router);
                             }
-                            if ui.button("Mask").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Mask);
+                            if ui.button("Batch (Q)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Batch);
+                            }
+                            if ui.button("Title (H)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Title);
                             }
                         });
                     
-                    egui::CollapsingHeader::new("📤 Output")
-                        .default_open(true)
+                    egui::CollapsingHeader::new("🤖 AI Generation")
+                        .default_open(false)
                         .show(ui, |ui| {
-                            if ui.button("Output").clicked() {
-                                self.graph.add_node(crate::nodes::NodeType::Output);
+                            if ui.button("Omni (O)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Omni);
+                            }
+                            if ui.button("LLM (L)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Llm);
+                            }
+                            if ui.button("Video (D)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Video);
+                            }
+                            if ui.button("Upscaler (U)").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Upscaler);
                             }
                         });
                 });
@@ -426,10 +508,8 @@ impl eframe::App for FlowNodeApp {
             }
         });
         
-        // Keyboard shortcut: R to run graph
-        if ctx.input(|i| i.key_pressed(egui::Key::R) && !i.modifiers.ctrl && !i.modifiers.command) {
-            self.run_graph(ctx);
-        }
+        // Keyboard shortcuts - matching React app exactly
+        self.handle_keyboard_shortcuts(ctx);
         
         // Bottom status bar
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
@@ -442,7 +522,7 @@ impl eframe::App for FlowNodeApp {
                 }
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label("Press R to run | Delete to remove node | Drag to connect");
+                    ui.label("A=Adjust E=Effects I=Image | Del=Delete | Ctrl+G=Run");
                 });
             });
         });

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use std::collections::HashMap;
 
-use crate::nodes::{Node, NodeType, NodeProperties, SlotType, BlurType, BlendMode};
+use crate::nodes::{Node, NodeType, NodeProperties, SlotType, BlurDirection, BlendMode};
 use crate::ui_components::{style, colors};
 
 /// A connection between two nodes
@@ -89,6 +89,19 @@ impl NodeGraph {
         log::info!("Deleted node {:?}", node_id);
     }
     
+    /// Deselect all nodes
+    pub fn deselect_all(&mut self) {
+        self.selected_node = None;
+        self.pending_connection = None;
+    }
+    
+    /// Delete the currently selected node
+    pub fn delete_selected(&mut self) {
+        if let Some(node_id) = self.selected_node {
+            self.delete_node(node_id);
+        }
+    }
+    
     /// Delete a specific connection
     pub fn delete_connection(&mut self, from_node: Uuid, from_slot: usize, to_node: Uuid, to_slot: usize) {
         self.connections.retain(|c| {
@@ -151,11 +164,11 @@ impl NodeGraph {
         self.zoom = zoom;
     }
     
-    /// Set the image ID for an ImageInput node
-    /// Returns true if the node was an ImageInput and was updated
+    /// Set the image ID for an Image node
+    /// Returns true if the node was an Image node and was updated
     pub fn set_node_image(&mut self, node_id: Uuid, image_id: u64) -> bool {
         if let Some(node) = self.nodes.get_mut(&node_id) {
-            if let NodeProperties::ImageInput { texture_id, .. } = &mut node.properties {
+            if let NodeProperties::Image { texture_id, .. } = &mut node.properties {
                 *texture_id = Some(image_id);
                 return true;
             }
@@ -166,7 +179,7 @@ impl NodeGraph {
     /// Get the image ID for a node (if it has one)
     pub fn get_node_image(&self, node_id: Uuid) -> Option<u64> {
         self.nodes.get(&node_id).and_then(|node| {
-            if let NodeProperties::ImageInput { texture_id, .. } = &node.properties {
+            if let NodeProperties::Image { texture_id, .. } = &node.properties {
                 *texture_id
             } else {
                 None
@@ -179,7 +192,7 @@ impl NodeGraph {
         let node_count = self.nodes.len() as f32;
         let offset_x = (node_count * 30.0) % 200.0;
         let offset_y = (node_count * 20.0) % 150.0;
-        let position = Pos2::new(
+        let position = Vec2::new(
             100.0 + offset_x,
             100.0 + offset_y,
         );
@@ -227,7 +240,7 @@ impl NodeGraph {
             ) {
                 let from_pos = self.get_slot_position(from_node, conn.from_slot, false, canvas_rect);
                 let to_pos = self.get_slot_position(to_node, conn.to_slot, true, canvas_rect);
-                self.draw_connection(&painter, from_pos, to_pos, SlotType::Image);
+                self.draw_connection(&painter, from_pos, to_pos, SlotType::Content);
             }
         }
         
@@ -240,11 +253,11 @@ impl NodeGraph {
                     let slot_type = if pending.is_output {
                         node.node_type.outputs().get(pending.from_slot)
                             .map(|s| s.slot_type)
-                            .unwrap_or(SlotType::Image)
+                            .unwrap_or(SlotType::Content)
                     } else {
                         node.node_type.inputs().get(pending.from_slot)
                             .map(|s| s.slot_type)
-                            .unwrap_or(SlotType::Image)
+                            .unwrap_or(SlotType::Content)
                     };
                     self.draw_connection(&painter, from_pos, mouse_pos, slot_type);
                 }
@@ -593,111 +606,248 @@ impl NodeGraph {
         ui.separator();
         
         match &mut node.properties {
-            NodeProperties::ImageInput { file_path, texture_id } => {
-                ui.horizontal(|ui| {
-                    ui.label("File:");
-                    if ui.button("Browse...").clicked() {
-                        // TODO: File picker
-                    }
-                });
-                if let Some(path) = file_path {
-                    ui.label(format!("Loaded: {}", path));
-                }
+            // === Content Nodes ===
+            NodeProperties::Image { texture_id, .. } => {
                 if let Some(id) = texture_id {
-                    ui.label(format!("Image ID: {}", id));
+                    ui.label(format!("Image loaded (ID: {})", id));
+                } else {
+                    ui.label("Drop an image to load");
                 }
             }
             
-            NodeProperties::Color { color } => {
+            NodeProperties::Content { content } => {
+                if let Some(c) = content {
+                    ui.label(format!("Content: {}", c));
+                } else {
+                    ui.label("No content");
+                }
+            }
+            
+            NodeProperties::Bucket { images } => {
+                ui.label(format!("{} images", images.len()));
+            }
+            
+            // === Adjust Node (full color grading) ===
+            NodeProperties::Adjust { 
+                brightness, contrast, saturation, exposure,
+                highlights, shadows, temperature, tint,
+                vibrance, gamma, color_boost, hue_rotation, luminance_mix, ..
+            } => {
+                egui::CollapsingHeader::new("Basic Adjustments")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.add(egui::Slider::new(brightness, -100.0..=100.0).text("Brightness"));
+                        ui.add(egui::Slider::new(contrast, -100.0..=100.0).text("Contrast"));
+                        ui.add(egui::Slider::new(saturation, -100.0..=100.0).text("Saturation"));
+                        ui.add(egui::Slider::new(exposure, -100.0..=100.0).text("Exposure"));
+                    });
+                
+                egui::CollapsingHeader::new("Tone")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.add(egui::Slider::new(highlights, -100.0..=100.0).text("Highlights"));
+                        ui.add(egui::Slider::new(shadows, -100.0..=100.0).text("Shadows"));
+                        ui.add(egui::Slider::new(gamma, -100.0..=100.0).text("Gamma"));
+                    });
+                
+                egui::CollapsingHeader::new("Color")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.add(egui::Slider::new(temperature, -100.0..=100.0).text("Temperature"));
+                        ui.add(egui::Slider::new(tint, -100.0..=100.0).text("Tint"));
+                        ui.add(egui::Slider::new(vibrance, -100.0..=100.0).text("Vibrance"));
+                        ui.add(egui::Slider::new(color_boost, -100.0..=100.0).text("Color Boost"));
+                        ui.add(egui::Slider::new(hue_rotation, -180.0..=180.0).text("Hue Rotation"));
+                    });
+                
+                egui::CollapsingHeader::new("Mix")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.add(egui::Slider::new(luminance_mix, 0.0..=100.0).text("Luminance Mix"));
+                    });
+                
+                // TODO: Color wheels and curves
+                ui.separator();
+                ui.label(egui::RichText::new("Color wheels coming soon").italics().weak());
+            }
+            
+            // === Effects Node ===
+            NodeProperties::Effects {
+                gaussian_blur, directional_blur, directional_blur_angle,
+                progressive_blur, progressive_blur_direction, progressive_blur_falloff,
+                glass_blinds, glass_blinds_frequency, glass_blinds_angle, glass_blinds_phase,
+                grain, grain_size, grain_monochrome, grain_seed,
+                sharpen, vignette, vignette_roundness, vignette_smoothness
+            } => {
+                egui::CollapsingHeader::new("Blur")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.add(egui::Slider::new(gaussian_blur, 0.0..=100.0).text("Gaussian"));
+                        ui.add(egui::Slider::new(directional_blur, 0.0..=100.0).text("Directional"));
+                        if *directional_blur > 0.0 {
+                            ui.add(egui::Slider::new(directional_blur_angle, 0.0..=360.0).text("Angle"));
+                        }
+                        ui.add(egui::Slider::new(progressive_blur, 0.0..=100.0).text("Progressive"));
+                        if *progressive_blur > 0.0 {
+                            ui.add(egui::Slider::new(progressive_blur_falloff, 0.0..=100.0).text("Falloff"));
+                            ui.horizontal(|ui| {
+                                ui.label("Direction:");
+                                egui::ComboBox::from_id_salt("blur_dir")
+                                    .selected_text(format!("{:?}", progressive_blur_direction))
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(progressive_blur_direction, BlurDirection::Top, "Top");
+                                        ui.selectable_value(progressive_blur_direction, BlurDirection::Bottom, "Bottom");
+                                        ui.selectable_value(progressive_blur_direction, BlurDirection::Left, "Left");
+                                        ui.selectable_value(progressive_blur_direction, BlurDirection::Right, "Right");
+                                    });
+                            });
+                        }
+                    });
+                
+                egui::CollapsingHeader::new("Glass Blinds")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.add(egui::Slider::new(glass_blinds, 0.0..=100.0).text("Intensity"));
+                        ui.add(egui::Slider::new(glass_blinds_frequency, 1.0..=50.0).text("Frequency"));
+                        ui.add(egui::Slider::new(glass_blinds_angle, 0.0..=360.0).text("Angle"));
+                        ui.add(egui::Slider::new(glass_blinds_phase, 0.0..=100.0).text("Phase"));
+                    });
+                
+                egui::CollapsingHeader::new("Grain")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.add(egui::Slider::new(grain, 0.0..=100.0).text("Amount"));
+                        ui.add(egui::Slider::new(grain_size, 1.0..=10.0).text("Size"));
+                        ui.checkbox(grain_monochrome, "Monochrome");
+                        ui.add(egui::DragValue::new(grain_seed).prefix("Seed: "));
+                    });
+                
+                egui::CollapsingHeader::new("Sharpen & Vignette")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.add(egui::Slider::new(sharpen, 0.0..=100.0).text("Sharpen"));
+                        ui.separator();
+                        ui.add(egui::Slider::new(vignette, 0.0..=100.0).text("Vignette"));
+                        if *vignette > 0.0 {
+                            ui.add(egui::Slider::new(vignette_roundness, 0.0..=100.0).text("Roundness"));
+                            ui.add(egui::Slider::new(vignette_smoothness, 0.0..=100.0).text("Smoothness"));
+                        }
+                    });
+            }
+            
+            // === Text Nodes ===
+            NodeProperties::Text { text } => {
+                ui.text_edit_multiline(text);
+            }
+            
+            NodeProperties::Concat { separator } => {
+                ui.horizontal(|ui| {
+                    ui.label("Separator:");
+                    ui.text_edit_singleline(separator);
+                });
+            }
+            
+            NodeProperties::Splitter { delimiter } => {
+                ui.horizontal(|ui| {
+                    ui.label("Delimiter:");
+                    ui.text_edit_singleline(delimiter);
+                });
+            }
+            
+            NodeProperties::Postit { text, color } => {
+                ui.text_edit_multiline(text);
                 ui.horizontal(|ui| {
                     ui.label("Color:");
                     ui.color_edit_button_rgba_unmultiplied(color);
                 });
             }
             
-            NodeProperties::Number { value, min, max } => {
-                ui.add(egui::Slider::new(value, *min..=*max).text("Value"));
+            // === Utility Nodes ===
+            NodeProperties::Compare {} => {
+                ui.label("Drop 2 images to compare");
             }
             
-            NodeProperties::BrightnessContrast { brightness, contrast } => {
-                ui.add(egui::Slider::new(brightness, -1.0..=1.0).text("Brightness"));
-                ui.add(egui::Slider::new(contrast, -1.0..=1.0).text("Contrast"));
+            NodeProperties::Composition { layers } => {
+                ui.label(format!("{} layers", layers.len()));
             }
             
-            NodeProperties::HueSaturation { hue, saturation, lightness } => {
-                ui.add(egui::Slider::new(hue, -180.0..=180.0).text("Hue"));
-                ui.add(egui::Slider::new(saturation, -1.0..=1.0).text("Saturation"));
-                ui.add(egui::Slider::new(lightness, -1.0..=1.0).text("Lightness"));
+            NodeProperties::Router { active_output } => {
+                ui.add(egui::Slider::new(active_output, 0..=2).text("Output"));
             }
             
-            NodeProperties::Levels { black_point, white_point, gamma } => {
-                ui.add(egui::Slider::new(black_point, 0.0..=1.0).text("Black Point"));
-                ui.add(egui::Slider::new(white_point, 0.0..=1.0).text("White Point"));
-                ui.add(egui::Slider::new(gamma, 0.1..=3.0).text("Gamma"));
+            NodeProperties::Batch { items } => {
+                ui.label(format!("{} items in batch", items.len()));
             }
             
-            NodeProperties::Blur { radius, blur_type } => {
-                ui.add(egui::Slider::new(radius, 0.0..=50.0).text("Radius"));
+            NodeProperties::Title { text } => {
+                ui.text_edit_singleline(text);
+            }
+            
+            NodeProperties::Group {} | NodeProperties::Folder {} | NodeProperties::Convertor {} => {
+                ui.label("No properties");
+            }
+            
+            // === AI Nodes ===
+            NodeProperties::Omni { model, prompt, negative_prompt, seed } => {
                 ui.horizontal(|ui| {
-                    ui.label("Type:");
-                    egui::ComboBox::from_id_salt("blur_type")
-                        .selected_text(format!("{:?}", blur_type))
+                    ui.label("Model:");
+                    ui.text_edit_singleline(model);
+                });
+                ui.label("Prompt:");
+                ui.text_edit_multiline(prompt);
+                ui.label("Negative:");
+                ui.text_edit_multiline(negative_prompt);
+                ui.horizontal(|ui| {
+                    ui.label("Seed:");
+                    if let Some(s) = seed {
+                        let mut val = *s as i32;
+                        if ui.add(egui::DragValue::new(&mut val)).changed() {
+                            *seed = Some(val as u32);
+                        }
+                    } else {
+                        ui.label("Random");
+                    }
+                });
+            }
+            
+            NodeProperties::Llm { model, system_prompt } => {
+                ui.horizontal(|ui| {
+                    ui.label("Model:");
+                    ui.text_edit_singleline(model);
+                });
+                ui.label("System Prompt:");
+                ui.text_edit_multiline(system_prompt);
+            }
+            
+            NodeProperties::Video { model, duration, aspect_ratio } => {
+                ui.horizontal(|ui| {
+                    ui.label("Model:");
+                    ui.text_edit_singleline(model);
+                });
+                ui.add(egui::Slider::new(duration, 4..=10).text("Duration (s)"));
+                ui.horizontal(|ui| {
+                    ui.label("Aspect:");
+                    egui::ComboBox::from_id_salt("aspect")
+                        .selected_text(aspect_ratio.as_str())
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(blur_type, BlurType::Gaussian, "Gaussian");
-                            ui.selectable_value(blur_type, BlurType::Box, "Box");
-                            ui.selectable_value(blur_type, BlurType::Motion, "Motion");
+                            ui.selectable_value(aspect_ratio, "16:9".to_string(), "16:9");
+                            ui.selectable_value(aspect_ratio, "9:16".to_string(), "9:16");
+                            ui.selectable_value(aspect_ratio, "1:1".to_string(), "1:1");
                         });
                 });
             }
             
-            NodeProperties::Sharpen { amount, radius } => {
-                ui.add(egui::Slider::new(amount, 0.0..=5.0).text("Amount"));
-                ui.add(egui::Slider::new(radius, 0.1..=5.0).text("Radius"));
-            }
-            
-            NodeProperties::Noise { amount, monochrome } => {
-                ui.add(egui::Slider::new(amount, 0.0..=1.0).text("Amount"));
-                ui.checkbox(monochrome, "Monochrome");
-            }
-            
-            NodeProperties::Blend { mode, opacity } => {
+            NodeProperties::Upscaler { model, scale } => {
                 ui.horizontal(|ui| {
-                    ui.label("Mode:");
-                    egui::ComboBox::from_id_salt("blend_mode")
-                        .selected_text(format!("{:?}", mode))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(mode, BlendMode::Normal, "Normal");
-                            ui.selectable_value(mode, BlendMode::Multiply, "Multiply");
-                            ui.selectable_value(mode, BlendMode::Screen, "Screen");
-                            ui.selectable_value(mode, BlendMode::Overlay, "Overlay");
-                            ui.selectable_value(mode, BlendMode::SoftLight, "Soft Light");
-                            ui.selectable_value(mode, BlendMode::HardLight, "Hard Light");
-                            ui.selectable_value(mode, BlendMode::Difference, "Difference");
-                            ui.selectable_value(mode, BlendMode::Exclusion, "Exclusion");
-                        });
+                    ui.label("Model:");
+                    ui.text_edit_singleline(model);
                 });
-                ui.add(egui::Slider::new(opacity, 0.0..=1.0).text("Opacity"));
+                ui.add(egui::Slider::new(scale, 2..=4).text("Scale"));
             }
             
-            NodeProperties::Mask { invert } => {
-                ui.checkbox(invert, "Invert Mask");
-            }
-            
-            NodeProperties::Invert {} => {
-                ui.label("Inverts all colors");
-                ui.label("No parameters");
-            }
-            
-            NodeProperties::Grayscale {} => {
-                ui.label("Converts to grayscale");
-                ui.label("Uses luminosity weighting");
-            }
-            
-            NodeProperties::Output {} => {
-                ui.label("Final output node");
-                if ui.button("Export Image...").clicked() {
-                    // TODO: Export
-                }
+            NodeProperties::Vector {} | NodeProperties::Rodin3d {} | NodeProperties::MindMap {} => {
+                ui.label("AI processing node");
+                ui.label("Connect an image/prompt to generate");
             }
         }
     }

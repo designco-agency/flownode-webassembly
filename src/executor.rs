@@ -5,21 +5,18 @@
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::graph::{NodeGraph, Connection};
+use crate::graph::NodeGraph;
 use crate::nodes::{NodeType, NodeProperties};
 use crate::image_data::ImageData;
-use crate::gpu::{cpu, BrightnessContrastParams, HueSaturationParams};
 
 /// Result of executing a node
 #[derive(Clone)]
 pub enum NodeOutput {
-    /// Image output
+    /// Image/content output
     Image(ImageData),
-    /// Color output [R, G, B, A] in 0-1 range
-    Color([f32; 4]),
-    /// Number output
-    Number(f32),
-    /// No output (e.g., output node)
+    /// Text output
+    Text(String),
+    /// No output
     None,
 }
 
@@ -36,7 +33,8 @@ impl Executor {
         }
     }
     
-    /// Execute the entire graph and return the output node's result
+    /// Execute the entire graph and return the final output
+    /// For now, returns the result of any Adjust or Effects node
     pub fn execute(&mut self, graph: &NodeGraph, input_images: &HashMap<u64, ImageData>) -> Result<Option<ImageData>, String> {
         // Clear previous outputs
         self.outputs.clear();
@@ -49,19 +47,29 @@ impl Executor {
             self.execute_node(graph, node_id, input_images)?;
         }
         
-        // Find the output node and return its input
+        // Find any image processing node and return its output
+        // Priority: Adjust > Effects > Image
+        let mut result: Option<ImageData> = None;
+        
         for (id, node) in graph.nodes_iter() {
-            if matches!(node.node_type, NodeType::Output) {
-                // Get the input to the output node
-                if let Some(conn) = graph.connections_iter().find(|c| c.to_node == *id) {
-                    if let Some(NodeOutput::Image(img)) = self.outputs.get(&conn.from_node) {
-                        return Ok(Some(img.clone()));
+            match node.node_type {
+                NodeType::Adjust | NodeType::Effects => {
+                    if let Some(NodeOutput::Image(img)) = self.outputs.get(id) {
+                        result = Some(img.clone());
                     }
                 }
+                NodeType::Image => {
+                    if result.is_none() {
+                        if let Some(NodeOutput::Image(img)) = self.outputs.get(id) {
+                            result = Some(img.clone());
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         
-        Ok(None)
+        Ok(result)
     }
     
     /// Execute a single node
@@ -77,10 +85,10 @@ impl Executor {
             .ok_or("Node not found")?;
         
         let output = match &node.properties {
-            NodeProperties::ImageInput { texture_id, .. } => {
-                // Get image from input_images map
-                if let Some(id) = texture_id {
-                    if let Some(img) = input_images.get(id) {
+            // === Image Node ===
+            NodeProperties::Image { texture_id, .. } => {
+                if let Some(tex_id) = texture_id {
+                    if let Some(img) = input_images.get(tex_id) {
                         NodeOutput::Image(img.clone())
                     } else {
                         NodeOutput::None
@@ -90,114 +98,71 @@ impl Executor {
                 }
             }
             
-            NodeProperties::Color { color } => {
-                NodeOutput::Color(*color)
-            }
-            
-            NodeProperties::Number { value, .. } => {
-                NodeOutput::Number(*value)
-            }
-            
-            NodeProperties::BrightnessContrast { brightness, contrast } => {
-                // Get input image
+            // === Adjust Node (full color grading) ===
+            NodeProperties::Adjust { 
+                brightness, contrast, saturation, exposure,
+                highlights, shadows, temperature, tint,
+                vibrance, gamma, ..
+            } => {
                 let input = self.get_input_image(graph, node_id)?;
                 if let Some(img) = input {
-                    let params = BrightnessContrastParams {
-                        brightness: *brightness,
-                        contrast: *contrast,
-                    };
-                    let result = cpu::brightness_contrast(&img, params);
+                    let result = self.apply_adjustments(
+                        &img,
+                        *brightness, *contrast, *saturation, *exposure,
+                        *highlights, *shadows, *temperature, *tint,
+                        *vibrance, *gamma
+                    );
                     NodeOutput::Image(result)
                 } else {
                     NodeOutput::None
                 }
             }
             
-            NodeProperties::HueSaturation { hue, saturation, lightness } => {
-                // Get input image
+            // === Effects Node ===
+            NodeProperties::Effects {
+                gaussian_blur, grain, sharpen, vignette,
+                vignette_roundness, vignette_smoothness,
+                grain_monochrome, ..
+            } => {
                 let input = self.get_input_image(graph, node_id)?;
                 if let Some(img) = input {
-                    let params = HueSaturationParams {
-                        hue_shift: *hue,
-                        saturation: *saturation,
-                        lightness: *lightness,
-                    };
-                    // Use GPU context's CPU implementation for now
-                    let mut output = img.pixels.as_ref().clone();
+                    let mut result = img;
                     
-                    for chunk in output.chunks_exact_mut(4) {
-                        let r = chunk[0] as f32 / 255.0;
-                        let g = chunk[1] as f32 / 255.0;
-                        let b = chunk[2] as f32 / 255.0;
-                        
-                        // Simple saturation adjustment
-                        let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-                        let r = gray + (r - gray) * (1.0 + *saturation);
-                        let g = gray + (g - gray) * (1.0 + *saturation);
-                        let b = gray + (b - gray) * (1.0 + *saturation);
-                        
-                        // Lightness adjustment
-                        let r = (r + *lightness).clamp(0.0, 1.0);
-                        let g = (g + *lightness).clamp(0.0, 1.0);
-                        let b = (b + *lightness).clamp(0.0, 1.0);
-                        
-                        chunk[0] = (r * 255.0) as u8;
-                        chunk[1] = (g * 255.0) as u8;
-                        chunk[2] = (b * 255.0) as u8;
+                    // Apply effects in order
+                    if *gaussian_blur > 0.0 {
+                        result = self.apply_blur(&result, (*gaussian_blur * 0.5) as u32);
+                    }
+                    if *sharpen > 0.0 {
+                        result = self.apply_sharpen(&result, *sharpen / 100.0);
+                    }
+                    if *grain > 0.0 {
+                        result = self.apply_grain(&result, *grain / 100.0, *grain_monochrome);
+                    }
+                    if *vignette > 0.0 {
+                        result = self.apply_vignette(&result, *vignette / 100.0, *vignette_roundness / 100.0, *vignette_smoothness / 100.0);
                     }
                     
-                    NodeOutput::Image(ImageData::new(output, img.width, img.height))
-                } else {
-                    NodeOutput::None
-                }
-            }
-            
-            NodeProperties::Blur { radius, .. } => {
-                let input = self.get_input_image(graph, node_id)?;
-                if let Some(img) = input {
-                    // Simple box blur for now
-                    let result = self.apply_blur(&img, *radius as u32);
                     NodeOutput::Image(result)
                 } else {
                     NodeOutput::None
                 }
             }
             
-            NodeProperties::Invert {} => {
-                let input = self.get_input_image(graph, node_id)?;
-                if let Some(img) = input {
-                    let mut output = img.pixels.as_ref().clone();
-                    for chunk in output.chunks_exact_mut(4) {
-                        chunk[0] = 255 - chunk[0];
-                        chunk[1] = 255 - chunk[1];
-                        chunk[2] = 255 - chunk[2];
-                        // Keep alpha
-                    }
-                    NodeOutput::Image(ImageData::new(output, img.width, img.height))
-                } else {
-                    NodeOutput::None
-                }
+            // === Text Nodes ===
+            NodeProperties::Text { text } => {
+                NodeOutput::Text(text.clone())
             }
             
-            NodeProperties::Grayscale {} => {
-                let input = self.get_input_image(graph, node_id)?;
-                if let Some(img) = input {
-                    let mut output = img.pixels.as_ref().clone();
-                    for chunk in output.chunks_exact_mut(4) {
-                        let gray = (0.299 * chunk[0] as f32 + 0.587 * chunk[1] as f32 + 0.114 * chunk[2] as f32) as u8;
-                        chunk[0] = gray;
-                        chunk[1] = gray;
-                        chunk[2] = gray;
-                        // Keep alpha
-                    }
-                    NodeOutput::Image(ImageData::new(output, img.width, img.height))
-                } else {
-                    NodeOutput::None
-                }
+            NodeProperties::Concat { separator } => {
+                // Get text inputs and join them
+                let text1 = self.get_input_text(graph, node_id, 0);
+                let text2 = self.get_input_text(graph, node_id, 1);
+                let result = format!("{}{}{}", text1.unwrap_or_default(), separator, text2.unwrap_or_default());
+                NodeOutput::Text(result)
             }
             
-            NodeProperties::Output {} => {
-                // Output node just passes through
+            // Pass through for content nodes
+            NodeProperties::Content { .. } | NodeProperties::Bucket { .. } | NodeProperties::Compare {} => {
                 let input = self.get_input_image(graph, node_id)?;
                 if let Some(img) = input {
                     NodeOutput::Image(img)
@@ -206,7 +171,7 @@ impl Executor {
                 }
             }
             
-            // Other node types pass through or do nothing for now
+            // Other node types - not yet implemented
             _ => NodeOutput::None,
         };
         
@@ -216,7 +181,6 @@ impl Executor {
     
     /// Get the image input for a node (from first connected input)
     fn get_input_image(&self, graph: &NodeGraph, node_id: Uuid) -> Result<Option<ImageData>, String> {
-        // Find connection to this node's first input
         for conn in graph.connections_iter() {
             if conn.to_node == node_id && conn.to_slot == 0 {
                 if let Some(NodeOutput::Image(img)) = self.outputs.get(&conn.from_node) {
@@ -227,97 +191,307 @@ impl Executor {
         Ok(None)
     }
     
-    /// Simple box blur implementation
-    fn apply_blur(&self, input: &ImageData, radius: u32) -> ImageData {
-        if radius == 0 {
-            return input.clone();
+    /// Get text input at a specific slot
+    fn get_input_text(&self, graph: &NodeGraph, node_id: Uuid, slot: usize) -> Option<String> {
+        for conn in graph.connections_iter() {
+            if conn.to_node == node_id && conn.to_slot == slot {
+                if let Some(NodeOutput::Text(text)) = self.outputs.get(&conn.from_node) {
+                    return Some(text.clone());
+                }
+            }
+        }
+        None
+    }
+    
+    /// Topological sort of the graph
+    fn topological_sort(&self, graph: &NodeGraph) -> Result<Vec<Uuid>, String> {
+        let mut result = Vec::new();
+        let mut visited = HashMap::new();
+        
+        let node_ids: Vec<Uuid> = graph.nodes_iter().map(|(id, _)| *id).collect();
+        
+        for node_id in node_ids {
+            self.visit_node(graph, node_id, &mut visited, &mut result)?;
         }
         
-        let radius = radius.min(20); // Limit for performance
-        let width = input.width;
-        let height = input.height;
-        let mut output = vec![0u8; input.pixels.len()];
+        Ok(result)
+    }
+    
+    fn visit_node(
+        &self,
+        graph: &NodeGraph,
+        node_id: Uuid,
+        visited: &mut HashMap<Uuid, bool>,
+        result: &mut Vec<Uuid>,
+    ) -> Result<(), String> {
+        if let Some(&in_progress) = visited.get(&node_id) {
+            if in_progress {
+                return Err("Cycle detected in graph".to_string());
+            }
+            return Ok(());
+        }
         
+        visited.insert(node_id, true);
+        
+        // Visit all nodes that this node depends on
+        for conn in graph.connections_iter() {
+            if conn.to_node == node_id {
+                self.visit_node(graph, conn.from_node, visited, result)?;
+            }
+        }
+        
+        visited.insert(node_id, false);
+        result.push(node_id);
+        
+        Ok(())
+    }
+    
+    // === Image Processing Functions ===
+    
+    /// Apply all adjust node parameters
+    fn apply_adjustments(
+        &self,
+        img: &ImageData,
+        brightness: f32,
+        contrast: f32,
+        saturation: f32,
+        exposure: f32,
+        highlights: f32,
+        shadows: f32,
+        temperature: f32,
+        tint: f32,
+        vibrance: f32,
+        gamma: f32,
+    ) -> ImageData {
+        let mut output = img.pixels.as_ref().clone();
+        
+        // Convert -100..100 ranges to usable values
+        let brightness_factor = brightness / 100.0;
+        let contrast_factor = 1.0 + (contrast / 100.0);
+        let saturation_factor = 1.0 + (saturation / 100.0);
+        let exposure_factor = (exposure / 50.0).exp2(); // 2^(exposure/50) for natural feel
+        let gamma_value = 1.0 / (1.0 + gamma / 100.0).max(0.1);
+        let temp_shift = temperature / 100.0;
+        let tint_shift = tint / 100.0;
+        let vibrance_factor = vibrance / 100.0;
+        
+        for chunk in output.chunks_exact_mut(4) {
+            let mut r = chunk[0] as f32 / 255.0;
+            let mut g = chunk[1] as f32 / 255.0;
+            let mut b = chunk[2] as f32 / 255.0;
+            
+            // Exposure
+            r *= exposure_factor;
+            g *= exposure_factor;
+            b *= exposure_factor;
+            
+            // Temperature (shift R/B balance)
+            r += temp_shift * 0.1;
+            b -= temp_shift * 0.1;
+            
+            // Tint (shift G/M balance)
+            g += tint_shift * 0.05;
+            
+            // Brightness
+            r += brightness_factor;
+            g += brightness_factor;
+            b += brightness_factor;
+            
+            // Contrast
+            r = (r - 0.5) * contrast_factor + 0.5;
+            g = (g - 0.5) * contrast_factor + 0.5;
+            b = (b - 0.5) * contrast_factor + 0.5;
+            
+            // Saturation
+            let luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+            r = luminance + (r - luminance) * saturation_factor;
+            g = luminance + (g - luminance) * saturation_factor;
+            b = luminance + (b - luminance) * saturation_factor;
+            
+            // Vibrance (saturation that affects less saturated colors more)
+            let max_rgb = r.max(g).max(b);
+            let min_rgb = r.min(g).min(b);
+            let current_sat = if max_rgb > 0.0 { (max_rgb - min_rgb) / max_rgb } else { 0.0 };
+            let vib_mult = 1.0 + vibrance_factor * (1.0 - current_sat);
+            r = luminance + (r - luminance) * vib_mult;
+            g = luminance + (g - luminance) * vib_mult;
+            b = luminance + (b - luminance) * vib_mult;
+            
+            // Highlights/Shadows (simplified)
+            if luminance > 0.5 {
+                let highlight_factor = (luminance - 0.5) * 2.0 * (highlights / 200.0);
+                r += highlight_factor;
+                g += highlight_factor;
+                b += highlight_factor;
+            } else {
+                let shadow_factor = (0.5 - luminance) * 2.0 * (shadows / 200.0);
+                r += shadow_factor;
+                g += shadow_factor;
+                b += shadow_factor;
+            }
+            
+            // Gamma
+            r = r.max(0.0).powf(gamma_value);
+            g = g.max(0.0).powf(gamma_value);
+            b = b.max(0.0).powf(gamma_value);
+            
+            // Clamp and store
+            chunk[0] = (r.clamp(0.0, 1.0) * 255.0) as u8;
+            chunk[1] = (g.clamp(0.0, 1.0) * 255.0) as u8;
+            chunk[2] = (b.clamp(0.0, 1.0) * 255.0) as u8;
+        }
+        
+        ImageData::new(output, img.width, img.height)
+    }
+    
+    /// Apply gaussian blur (simplified box blur)
+    fn apply_blur(&self, img: &ImageData, radius: u32) -> ImageData {
+        if radius == 0 {
+            return img.clone();
+        }
+        
+        let radius = radius.min(50) as i32;
+        let width = img.width as i32;
+        let height = img.height as i32;
+        let mut output = img.pixels.as_ref().clone();
+        
+        // Horizontal pass
+        let mut temp = output.clone();
         for y in 0..height {
             for x in 0..width {
                 let mut r_sum = 0u32;
                 let mut g_sum = 0u32;
                 let mut b_sum = 0u32;
-                let mut a_sum = 0u32;
                 let mut count = 0u32;
                 
-                let x_start = x.saturating_sub(radius);
-                let x_end = (x + radius + 1).min(width);
-                let y_start = y.saturating_sub(radius);
-                let y_end = (y + radius + 1).min(height);
+                for dx in -radius..=radius {
+                    let sx = (x + dx).clamp(0, width - 1);
+                    let idx = ((y * width + sx) * 4) as usize;
+                    r_sum += img.pixels[idx] as u32;
+                    g_sum += img.pixels[idx + 1] as u32;
+                    b_sum += img.pixels[idx + 2] as u32;
+                    count += 1;
+                }
                 
-                for sy in y_start..y_end {
-                    for sx in x_start..x_end {
-                        let pixel = input.get_pixel(sx, sy);
-                        r_sum += pixel[0] as u32;
-                        g_sum += pixel[1] as u32;
-                        b_sum += pixel[2] as u32;
-                        a_sum += pixel[3] as u32;
-                        count += 1;
-                    }
+                let idx = ((y * width + x) * 4) as usize;
+                temp[idx] = (r_sum / count) as u8;
+                temp[idx + 1] = (g_sum / count) as u8;
+                temp[idx + 2] = (b_sum / count) as u8;
+            }
+        }
+        
+        // Vertical pass
+        for y in 0..height {
+            for x in 0..width {
+                let mut r_sum = 0u32;
+                let mut g_sum = 0u32;
+                let mut b_sum = 0u32;
+                let mut count = 0u32;
+                
+                for dy in -radius..=radius {
+                    let sy = (y + dy).clamp(0, height - 1);
+                    let idx = ((sy * width + x) * 4) as usize;
+                    r_sum += temp[idx] as u32;
+                    g_sum += temp[idx + 1] as u32;
+                    b_sum += temp[idx + 2] as u32;
+                    count += 1;
                 }
                 
                 let idx = ((y * width + x) * 4) as usize;
                 output[idx] = (r_sum / count) as u8;
                 output[idx + 1] = (g_sum / count) as u8;
                 output[idx + 2] = (b_sum / count) as u8;
-                output[idx + 3] = (a_sum / count) as u8;
             }
         }
         
-        ImageData::new(output, width, height)
+        ImageData::new(output, img.width, img.height)
     }
     
-    /// Topological sort of nodes (Kahn's algorithm)
-    fn topological_sort(&self, graph: &NodeGraph) -> Result<Vec<Uuid>, String> {
-        let mut in_degree: HashMap<Uuid, usize> = HashMap::new();
-        let mut adjacency: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    /// Apply sharpening (unsharp mask)
+    fn apply_sharpen(&self, img: &ImageData, amount: f32) -> ImageData {
+        // Create a blurred version
+        let blurred = self.apply_blur(img, 1);
+        let mut output = img.pixels.as_ref().clone();
         
-        // Initialize
-        for (id, _) in graph.nodes_iter() {
-            in_degree.insert(*id, 0);
-            adjacency.insert(*id, Vec::new());
+        for i in (0..output.len()).step_by(4) {
+            for c in 0..3 {
+                let original = img.pixels[i + c] as f32;
+                let blur = blurred.pixels[i + c] as f32;
+                // Unsharp mask: original + amount * (original - blur)
+                let sharpened = original + amount * (original - blur);
+                output[i + c] = sharpened.clamp(0.0, 255.0) as u8;
+            }
         }
         
-        // Build graph
-        for conn in graph.connections_iter() {
-            adjacency.get_mut(&conn.from_node)
-                .map(|v| v.push(conn.to_node));
-            *in_degree.get_mut(&conn.to_node).unwrap_or(&mut 0) += 1;
-        }
+        ImageData::new(output, img.width, img.height)
+    }
+    
+    /// Apply film grain
+    fn apply_grain(&self, img: &ImageData, amount: f32, monochrome: bool) -> ImageData {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         
-        // Find nodes with no incoming edges
-        let mut queue: Vec<Uuid> = in_degree.iter()
-            .filter(|(_, &deg)| deg == 0)
-            .map(|(id, _)| *id)
-            .collect();
+        let mut output = img.pixels.as_ref().clone();
+        let mut hasher = DefaultHasher::new();
         
-        let mut result = Vec::new();
-        
-        while let Some(node) = queue.pop() {
-            result.push(node);
+        for i in (0..output.len()).step_by(4) {
+            // Simple pseudo-random based on position
+            i.hash(&mut hasher);
+            let noise = ((hasher.finish() % 256) as f32 / 255.0 - 0.5) * 2.0 * amount * 50.0;
             
-            if let Some(neighbors) = adjacency.get(&node) {
-                for neighbor in neighbors {
-                    if let Some(deg) = in_degree.get_mut(neighbor) {
-                        *deg -= 1;
-                        if *deg == 0 {
-                            queue.push(*neighbor);
-                        }
-                    }
+            if monochrome {
+                for c in 0..3 {
+                    let val = output[i + c] as f32 + noise;
+                    output[i + c] = val.clamp(0.0, 255.0) as u8;
+                }
+            } else {
+                for c in 0..3 {
+                    (i + c).hash(&mut hasher);
+                    let color_noise = ((hasher.finish() % 256) as f32 / 255.0 - 0.5) * 2.0 * amount * 50.0;
+                    let val = output[i + c] as f32 + color_noise;
+                    output[i + c] = val.clamp(0.0, 255.0) as u8;
                 }
             }
         }
         
-        if result.len() != in_degree.len() {
-            return Err("Cycle detected in node graph".to_string());
+        ImageData::new(output, img.width, img.height)
+    }
+    
+    /// Apply vignette effect
+    fn apply_vignette(&self, img: &ImageData, intensity: f32, roundness: f32, smoothness: f32) -> ImageData {
+        let mut output = img.pixels.as_ref().clone();
+        let width = img.width as f32;
+        let height = img.height as f32;
+        let cx = width / 2.0;
+        let cy = height / 2.0;
+        let max_dist = (cx * cx + cy * cy).sqrt();
+        
+        // Roundness: 0 = elliptical, 1 = circular
+        let aspect = width / height;
+        let x_scale = 1.0 + (1.0 - roundness) * (aspect - 1.0).abs();
+        
+        for y in 0..img.height {
+            for x in 0..img.width {
+                let dx = (x as f32 - cx) / x_scale;
+                let dy = y as f32 - cy;
+                let dist = (dx * dx + dy * dy).sqrt() / max_dist;
+                
+                // Vignette falloff based on smoothness
+                let falloff_start = 0.3 + smoothness * 0.4;
+                let vignette = if dist < falloff_start {
+                    1.0
+                } else {
+                    let t = (dist - falloff_start) / (1.0 - falloff_start);
+                    1.0 - t.powf(2.0 - smoothness) * intensity
+                };
+                
+                let idx = ((y * img.width + x) * 4) as usize;
+                for c in 0..3 {
+                    output[idx + c] = (output[idx + c] as f32 * vignette).clamp(0.0, 255.0) as u8;
+                }
+            }
         }
         
-        Ok(result)
+        ImageData::new(output, img.width, img.height)
     }
 }
