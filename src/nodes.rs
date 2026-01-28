@@ -185,6 +185,8 @@ impl Node {
 pub enum NodeProperties {
     ImageInput {
         file_path: Option<String>,
+        #[serde(skip)]
+        texture_id: Option<u64>, // Runtime texture cache ID
     },
     Color {
         color: [f32; 4],
@@ -233,7 +235,7 @@ pub enum NodeProperties {
 impl NodeProperties {
     pub fn for_type(node_type: NodeType) -> Self {
         match node_type {
-            NodeType::ImageInput => Self::ImageInput { file_path: None },
+            NodeType::ImageInput => Self::ImageInput { file_path: None, texture_id: None },
             NodeType::Color => Self::Color { color: [1.0, 1.0, 1.0, 1.0] },
             NodeType::Number => Self::Number { value: 0.0, min: 0.0, max: 1.0 },
             NodeType::BrightnessContrast => Self::BrightnessContrast { brightness: 0.0, contrast: 0.0 },

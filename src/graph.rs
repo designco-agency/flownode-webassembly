@@ -151,7 +151,30 @@ impl NodeGraph {
         self.zoom = zoom;
     }
     
-    pub fn add_node(&mut self, node_type: NodeType) {
+    /// Set the image ID for an ImageInput node
+    /// Returns true if the node was an ImageInput and was updated
+    pub fn set_node_image(&mut self, node_id: Uuid, image_id: u64) -> bool {
+        if let Some(node) = self.nodes.get_mut(&node_id) {
+            if let NodeProperties::ImageInput { texture_id, .. } = &mut node.properties {
+                *texture_id = Some(image_id);
+                return true;
+            }
+        }
+        false
+    }
+    
+    /// Get the image ID for a node (if it has one)
+    pub fn get_node_image(&self, node_id: Uuid) -> Option<u64> {
+        self.nodes.get(&node_id).and_then(|node| {
+            if let NodeProperties::ImageInput { texture_id, .. } = &node.properties {
+                *texture_id
+            } else {
+                None
+            }
+        })
+    }
+    
+    pub fn add_node(&mut self, node_type: NodeType) -> Uuid {
         // Place new nodes in the center of the viewport with slight random offset
         let node_count = self.nodes.len() as f32;
         let offset_x = (node_count * 30.0) % 200.0;
@@ -162,9 +185,11 @@ impl NodeGraph {
         );
         log::info!("Creating node {:?} at {:?}", node_type, position);
         let node = Node::new(node_type, position);
-        self.selected_node = Some(node.id);
-        self.nodes.insert(node.id, node);
+        let node_id = node.id;
+        self.selected_node = Some(node_id);
+        self.nodes.insert(node_id, node);
         log::info!("Total nodes: {}", self.nodes.len());
+        node_id
     }
     
     /// Show the node graph in the UI
@@ -548,7 +573,7 @@ impl NodeGraph {
         ui.separator();
         
         match &mut node.properties {
-            NodeProperties::ImageInput { file_path } => {
+            NodeProperties::ImageInput { file_path, texture_id } => {
                 ui.horizontal(|ui| {
                     ui.label("File:");
                     if ui.button("Browse...").clicked() {
@@ -557,6 +582,9 @@ impl NodeGraph {
                 });
                 if let Some(path) = file_path {
                     ui.label(format!("Loaded: {}", path));
+                }
+                if let Some(id) = texture_id {
+                    ui.label(format!("Image ID: {}", id));
                 }
             }
             

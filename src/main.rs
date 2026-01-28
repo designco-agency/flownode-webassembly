@@ -10,6 +10,7 @@ mod nodes;
 mod graph;
 mod ui_components;
 mod compat;
+mod image_data;
 
 use app::FlowNodeApp;
 

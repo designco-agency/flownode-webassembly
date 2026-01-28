@@ -1,7 +1,9 @@
 //! Main application state and UI
 
 use eframe::egui;
+use std::collections::HashMap;
 use crate::graph::NodeGraph;
+use crate::image_data::{ImageData, TextureHandle};
 
 #[cfg(target_arch = "wasm32")]
 use js_sys;
@@ -22,6 +24,18 @@ pub struct FlowNodeApp {
     
     /// Dark mode (always true for now)
     dark_mode: bool,
+    
+    /// Loaded images (keyed by a unique ID)
+    images: HashMap<u64, ImageData>,
+    
+    /// Texture cache for rendering
+    textures: HashMap<u64, TextureHandle>,
+    
+    /// Next image ID
+    next_image_id: u64,
+    
+    /// Pending image load (node ID waiting for image)
+    pending_image_load: Option<uuid::Uuid>,
 }
 
 impl FlowNodeApp {
@@ -43,8 +57,56 @@ impl FlowNodeApp {
             show_properties: true,
             show_library: true,
             zoom: 1.0,
+            images: HashMap::new(),
+            textures: HashMap::new(),
+            next_image_id: 1,
+            pending_image_load: None,
             dark_mode: true,
         }
+    }
+    
+    /// Load image from bytes and assign to selected node or create new node
+    fn load_image_bytes(&mut self, ctx: &egui::Context, bytes: &[u8]) {
+        match crate::image_data::decode_image(bytes) {
+            Ok(image_data) => {
+                let image_id = self.next_image_id;
+                self.next_image_id += 1;
+                
+                // Create texture for display
+                let texture = TextureHandle::from_image_data(
+                    ctx,
+                    &format!("image_{}", image_id),
+                    &image_data,
+                );
+                
+                log::info!("Loaded image {}x{}", image_data.width, image_data.height);
+                
+                // Store the image and texture
+                self.images.insert(image_id, image_data);
+                self.textures.insert(image_id, texture);
+                
+                // Assign to selected node if it's an ImageInput, otherwise create new
+                if let Some(node_id) = self.graph.selected_node() {
+                    if self.graph.set_node_image(node_id, image_id) {
+                        log::info!("Assigned image to selected node");
+                        return;
+                    }
+                }
+                
+                // Create a new ImageInput node with this image
+                let node_id = self.graph.add_node(crate::nodes::NodeType::ImageInput);
+                self.graph.set_node_image(node_id, image_id);
+                log::info!("Created new ImageInput node with image");
+            }
+            Err(e) => {
+                log::error!("Failed to load image: {}", e);
+            }
+        }
+    }
+    
+    /// Get texture handle by ID
+    pub fn get_texture(&self, image_id: u64) -> Option<&TextureHandle> {
+        self.textures.get(&image_id)
     }
 }
 
@@ -220,6 +282,15 @@ impl eframe::App for FlowNodeApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             // This is where the magic happens - the entire graph is drawn here
             self.graph.show(ui);
+        });
+        
+        // Handle dropped files
+        ctx.input(|i| {
+            for file in &i.raw.dropped_files {
+                if let Some(bytes) = &file.bytes {
+                    self.load_image_bytes(ctx, bytes);
+                }
+            }
         });
         
         // Request continuous repaint for smooth 60fps (game engine style)
