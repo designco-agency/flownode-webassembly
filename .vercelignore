@@ -1,0 +1,11 @@
+# Only deploy the dist folder
+target/
+src/
+memory/
+.git/
+.cargo/
+Cargo.toml
+Cargo.lock
+Trunk.toml
+*.md
+*.rs
