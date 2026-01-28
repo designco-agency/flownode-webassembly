@@ -269,6 +269,12 @@ impl NodeGraph {
             }
         }
         
+        // Escape to deselect
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.selected_node = None;
+            self.pending_connection = None;
+        }
+        
         // Zoom with scroll wheel
         let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
         if scroll_delta != 0.0 {

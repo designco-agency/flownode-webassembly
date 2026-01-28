@@ -402,6 +402,11 @@ impl eframe::App for FlowNodeApp {
             }
         });
         
+        // Keyboard shortcut: R to run graph
+        if ctx.input(|i| i.key_pressed(egui::Key::R) && !i.modifiers.ctrl && !i.modifiers.command) {
+            self.run_graph(ctx);
+        }
+        
         // Request continuous repaint for smooth 60fps (game engine style)
         ctx.request_repaint();
     }
