@@ -1,6 +1,7 @@
 //! Image data handling for the node editor
 
 use std::sync::Arc;
+use image::GenericImageView;
 
 /// Raw image data that can be shared between nodes
 #[derive(Debug, Clone)]
@@ -71,10 +72,28 @@ impl ImageData {
     }
 }
 
+/// Maximum dimension for loaded images (prevents freezes with large images)
+const MAX_IMAGE_DIMENSION: u32 = 2048;
+
 /// Decode image from bytes (PNG, JPEG, etc.)
+/// Automatically resizes large images to prevent browser freezes
 pub fn decode_image(bytes: &[u8]) -> Result<ImageData, String> {
     let img = image::load_from_memory(bytes)
         .map_err(|e| format!("Failed to decode image: {}", e))?;
+    
+    let (width, height) = img.dimensions();
+    
+    // Resize if too large (prevents WASM freezes)
+    let img = if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+        let max_dim = width.max(height);
+        let scale = (MAX_IMAGE_DIMENSION as f32 / max_dim as f32).min(1.0);
+        let new_width = (width as f32 * scale) as u32;
+        let new_height = (height as f32 * scale) as u32;
+        log::info!("Resizing image from {}x{} to {}x{}", width, height, new_width, new_height);
+        img.resize(new_width, new_height, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
     
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
