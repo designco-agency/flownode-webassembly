@@ -1,0 +1,10 @@
+{
+    "name": "FlowNode Canvas",
+    "short_name": "FlowNode",
+    "description": "Node-based image editor - Canvas only, pure Rust/Wasm",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#1a1a2e",
+    "theme_color": "#6c63ff",
+    "icons": []
+}
