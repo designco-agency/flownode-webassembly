@@ -128,12 +128,23 @@ impl NodeGraph {
             }
         }
         
-        // Draw pending connection
+        // Draw pending connection (wire following mouse)
         if let Some(pending) = &self.pending_connection {
             if let Some(node) = self.nodes.get(&pending.from_node) {
                 let from_pos = self.get_slot_position(node, pending.from_slot, !pending.is_output, canvas_rect);
-                let to_pos = ui.input(|i| i.pointer.hover_pos()).unwrap_or(from_pos);
-                self.draw_connection(&painter, from_pos, to_pos, SlotType::Image);
+                if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                    // Get the slot type for coloring
+                    let slot_type = if pending.is_output {
+                        node.node_type.outputs().get(pending.from_slot)
+                            .map(|s| s.slot_type)
+                            .unwrap_or(SlotType::Image)
+                    } else {
+                        node.node_type.inputs().get(pending.from_slot)
+                            .map(|s| s.slot_type)
+                            .unwrap_or(SlotType::Image)
+                    };
+                    self.draw_connection(&painter, from_pos, mouse_pos, slot_type);
+                }
             }
         }
         
@@ -148,8 +159,19 @@ impl NodeGraph {
             self.selected_node = None;
         }
         
-        // Cancel pending connection on right click
+        // Cancel pending connection on right click or release without target
         if response.secondary_clicked() {
+            self.pending_connection = None;
+        }
+        
+        // Clear pending connection if mouse released without connecting
+        if ui.input(|i| i.pointer.any_released()) && self.pending_connection.is_some() {
+            // Small delay to allow the slot drop handler to run first
+            // If still pending after this frame, clear it
+        }
+        
+        // Actually clear on next frame if no connection was made
+        if !ui.input(|i| i.pointer.any_down()) && self.pending_connection.is_some() {
             self.pending_connection = None;
         }
     }
@@ -274,15 +296,27 @@ impl NodeGraph {
             egui::Color32::WHITE,
         );
         
-        // Input slots
+        // Input slots (with interaction)
         for (i, input) in inputs.iter().enumerate() {
             let slot_pos = Pos2::new(
                 node_pos.x,
                 node_pos.y + header_height + padding + (i as f32 + 0.5) * slot_height,
             );
             
+            let slot_radius = style::SLOT_RADIUS * self.zoom;
+            let slot_rect = Rect::from_center_size(slot_pos, Vec2::splat(slot_radius * 3.0));
+            let slot_id = egui::Id::new((node_id, "input", i));
+            let slot_response = ui.interact(slot_rect, slot_id, egui::Sense::click_and_drag());
+            
+            // Highlight on hover
+            let is_hovered = slot_response.hovered();
+            let radius = if is_hovered { slot_radius * 1.3 } else { slot_radius };
+            
             // Slot circle
-            painter.circle_filled(slot_pos, style::SLOT_RADIUS * self.zoom, input.slot_type.color());
+            painter.circle_filled(slot_pos, radius, input.slot_type.color());
+            if is_hovered {
+                painter.circle_stroke(slot_pos, radius + 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
+            }
             
             // Slot label
             painter.text(
@@ -292,17 +326,46 @@ impl NodeGraph {
                 egui::FontId::proportional(12.0 * self.zoom),
                 egui::Color32::GRAY,
             );
+            
+            // Handle connection drop on input slot
+            if slot_response.hovered() && ui.input(|i| i.pointer.any_released()) {
+                if let Some(pending) = &self.pending_connection {
+                    if pending.is_output && pending.from_node != node_id {
+                        // Complete the connection
+                        let new_conn = Connection {
+                            from_node: pending.from_node,
+                            from_slot: pending.from_slot,
+                            to_node: node_id,
+                            to_slot: i,
+                        };
+                        self.connections.push(new_conn);
+                        log::info!("Connection created: {:?} -> {:?}", pending.from_node, node_id);
+                    }
+                }
+            }
         }
         
-        // Output slots
+        // Output slots (with interaction)
         for (i, output) in outputs.iter().enumerate() {
             let slot_pos = Pos2::new(
                 node_pos.x + node_width,
                 node_pos.y + header_height + padding + (i as f32 + 0.5) * slot_height,
             );
             
+            let slot_radius = style::SLOT_RADIUS * self.zoom;
+            let slot_rect = Rect::from_center_size(slot_pos, Vec2::splat(slot_radius * 3.0));
+            let slot_id = egui::Id::new((node_id, "output", i));
+            let slot_response = ui.interact(slot_rect, slot_id, egui::Sense::click_and_drag());
+            
+            // Highlight on hover
+            let is_hovered = slot_response.hovered();
+            let radius = if is_hovered { slot_radius * 1.3 } else { slot_radius };
+            
             // Slot circle
-            painter.circle_filled(slot_pos, style::SLOT_RADIUS * self.zoom, output.slot_type.color());
+            painter.circle_filled(slot_pos, radius, output.slot_type.color());
+            if is_hovered {
+                painter.circle_stroke(slot_pos, radius + 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
+            }
             
             // Slot label
             painter.text(
@@ -312,6 +375,16 @@ impl NodeGraph {
                 egui::FontId::proportional(12.0 * self.zoom),
                 egui::Color32::GRAY,
             );
+            
+            // Start connection drag from output slot
+            if slot_response.drag_started() {
+                self.pending_connection = Some(PendingConnection {
+                    from_node: node_id,
+                    from_slot: i,
+                    is_output: true,
+                });
+                log::info!("Started connection from output slot {}", i);
+            }
         }
         
         // Handle node interaction
