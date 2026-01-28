@@ -44,6 +44,9 @@ pub struct FlowNodeApp {
     /// Clipboard for copy/paste
     clipboard: Option<crate::nodes::Node>,
     
+    /// Waiting for cloud load to complete
+    cloud_load_pending: bool,
+    
     /// Output image from last execution
     output_image: Option<ImageData>,
     
@@ -82,6 +85,7 @@ impl FlowNodeApp {
             output_image: None,
             output_texture: None,
             clipboard: None,
+            cloud_load_pending: false,
             status_message: None,
         };
         
@@ -300,6 +304,95 @@ impl FlowNodeApp {
         }
     }
     
+    /// Load test workflow from Supabase cloud (read-only test)
+    fn load_from_cloud_test(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            use crate::cloud::{SUPABASE_URL, SUPABASE_ANON_KEY, TEST_WORKFLOW_ID};
+            
+            // Use JS fetch for simplicity (async in sync context)
+            let js_code = format!(
+                r#"
+                (async () => {{
+                    try {{
+                        const resp = await fetch('{}/rest/v1/workflows?id=eq.{}&select=*', {{
+                            headers: {{
+                                'apikey': '{}',
+                                'Authorization': 'Bearer {}',
+                                'Content-Type': 'application/json'
+                            }}
+                        }});
+                        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                        const data = await resp.json();
+                        if (data.length > 0) {{
+                            console.log('Loaded workflow:', data[0].name);
+                            // Store in window for Rust to read
+                            window.__flownode_cloud_data = JSON.stringify({{
+                                name: data[0].name,
+                                nodes: data[0].nodes,
+                                edges: data[0].edges,
+                                viewport: data[0].viewport
+                            }});
+                            console.log('Stored workflow data for WASM');
+                        }} else {{
+                            window.__flownode_cloud_data = null;
+                            console.error('Workflow not found');
+                        }}
+                    }} catch(e) {{
+                        window.__flownode_cloud_data = null;
+                        console.error('Cloud load failed:', e);
+                    }}
+                }})();
+                "#,
+                SUPABASE_URL, TEST_WORKFLOW_ID, SUPABASE_ANON_KEY, SUPABASE_ANON_KEY
+            );
+            let _ = js_sys::eval(&js_code);
+            self.set_status("☁️ Loading from cloud...");
+            self.cloud_load_pending = true;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.set_status("⚠ Cloud sync only in browser");
+        }
+    }
+    
+    /// Check if cloud data is ready and process it
+    fn check_cloud_load(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if !self.cloud_load_pending {
+                return;
+            }
+            
+            // Check if JS has loaded the data
+            if let Ok(result) = js_sys::eval("window.__flownode_cloud_data || ''") {
+                if let Some(json_str) = result.as_string() {
+                    if !json_str.is_empty() {
+                        self.cloud_load_pending = false;
+                        
+                        // Parse the cloud data and convert to our format
+                        if let Ok(cloud_data) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                            log::info!("Cloud data received: {:?}", cloud_data.get("name"));
+                            
+                            // Extract nodes and convert
+                            if let Some(nodes) = cloud_data.get("nodes") {
+                                log::info!("Found {} nodes", nodes.as_array().map(|a| a.len()).unwrap_or(0));
+                                // For now, just report success - full conversion TODO
+                                self.set_status(&format!("✓ Loaded: {} ({} nodes)", 
+                                    cloud_data.get("name").and_then(|n| n.as_str()).unwrap_or("Untitled"),
+                                    nodes.as_array().map(|a| a.len()).unwrap_or(0)
+                                ));
+                            }
+                        }
+                        
+                        // Clear the JS data
+                        let _ = js_sys::eval("window.__flownode_cloud_data = null");
+                    }
+                }
+            }
+        }
+    }
+    
     /// Load workflow from browser's local storage
     fn load_from_local_storage(&mut self) {
         #[cfg(target_arch = "wasm32")]
@@ -363,6 +456,9 @@ impl FlowNodeApp {
 
 impl eframe::App for FlowNodeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Check for pending cloud load
+        self.check_cloud_load();
+        
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -412,6 +508,12 @@ impl eframe::App for FlowNodeApp {
                     }
                     if ui.button("📂 Load from Browser").clicked() {
                         self.load_from_local_storage();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new("☁️ Cloud").weak());
+                    if ui.button("Load Test Workflow").clicked() {
+                        self.load_from_cloud_test();
                         ui.close_menu();
                     }
                     ui.separator();

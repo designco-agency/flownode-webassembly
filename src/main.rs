@@ -13,6 +13,7 @@ mod compat;
 mod image_data;
 mod gpu;
 mod executor;
+mod cloud;
 
 use app::FlowNodeApp;
 
