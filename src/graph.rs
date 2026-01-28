@@ -1,6 +1,24 @@
 //! Node graph state and rendering
 
 use eframe::egui::{self, Pos2, Rect, Vec2};
+
+/// Convert HSV to RGB (h in 0-1, s in 0-1, v in 0-1)
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
+    let c = v * s;
+    let x = c * (1.0 - ((h * 6.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    
+    let (r, g, b) = match (h * 6.0) as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    
+    (r + m, g + m, b + m)
+}
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use std::collections::HashMap;
@@ -595,6 +613,90 @@ impl NodeGraph {
         Pos2::new(x, y)
     }
     
+    /// Draw a color wheel for color grading
+    fn color_wheel(ui: &mut egui::Ui, label: &str, wheel: &mut crate::nodes::ColorWheel) {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new(label).small());
+            
+            // Size of the wheel
+            let size = 60.0;
+            let (response, painter) = ui.allocate_painter(
+                egui::vec2(size, size),
+                egui::Sense::click_and_drag(),
+            );
+            
+            let center = response.rect.center();
+            let radius = size / 2.0 - 4.0;
+            
+            // Draw the wheel background (color gradient)
+            for i in 0..36 {
+                let angle1 = (i as f32) * std::f32::consts::PI * 2.0 / 36.0;
+                let angle2 = ((i + 1) as f32) * std::f32::consts::PI * 2.0 / 36.0;
+                
+                // HSV to RGB for the wedge color
+                let hue = i as f32 / 36.0;
+                let (r, g, b) = hsv_to_rgb(hue, 0.7, 0.8);
+                let color = egui::Color32::from_rgb(
+                    (r * 255.0) as u8,
+                    (g * 255.0) as u8,
+                    (b * 255.0) as u8,
+                );
+                
+                let p1 = center;
+                let p2 = center + egui::vec2(angle1.cos() * radius, angle1.sin() * radius);
+                let p3 = center + egui::vec2(angle2.cos() * radius, angle2.sin() * radius);
+                
+                painter.add(egui::Shape::convex_polygon(
+                    vec![p1, p2, p3],
+                    color,
+                    egui::Stroke::NONE,
+                ));
+            }
+            
+            // Draw border
+            painter.circle_stroke(center, radius, egui::Stroke::new(1.0, egui::Color32::GRAY));
+            
+            // Draw center point (neutral)
+            painter.circle_filled(center, 3.0, egui::Color32::WHITE);
+            
+            // Draw current position
+            let pos_x = center.x + wheel.x * radius * 0.9;
+            let pos_y = center.y + wheel.y * radius * 0.9;
+            painter.circle_filled(egui::pos2(pos_x, pos_y), 5.0, egui::Color32::WHITE);
+            painter.circle_stroke(egui::pos2(pos_x, pos_y), 5.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+            
+            // Handle interaction
+            if response.dragged() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let dx = (pos.x - center.x) / radius;
+                    let dy = (pos.y - center.y) / radius;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    
+                    // Clamp to circle
+                    if dist > 1.0 {
+                        wheel.x = dx / dist;
+                        wheel.y = dy / dist;
+                    } else {
+                        wheel.x = dx;
+                        wheel.y = dy;
+                    }
+                }
+            }
+            
+            // Double-click to reset
+            if response.double_clicked() {
+                wheel.x = 0.0;
+                wheel.y = 0.0;
+                wheel.luminance = 0.0;
+            }
+            
+            // Luminance slider below
+            ui.add(egui::Slider::new(&mut wheel.luminance, -100.0..=100.0)
+                .show_value(false)
+                .text(""));
+        });
+    }
+    
     /// Show properties panel for a node
     pub fn show_node_properties(&mut self, ui: &mut egui::Ui, node_id: Uuid) {
         let node = match self.nodes.get_mut(&node_id) {
@@ -631,7 +733,9 @@ impl NodeGraph {
             NodeProperties::Adjust { 
                 brightness, contrast, saturation, exposure,
                 highlights, shadows, temperature, tint,
-                vibrance, gamma, color_boost, hue_rotation, luminance_mix, ..
+                vibrance, gamma, 
+                lift, gamma_wheel, gain, offset,
+                color_boost, hue_rotation, luminance_mix, ..
             } => {
                 egui::CollapsingHeader::new("Basic Adjustments")
                     .default_open(true)
@@ -666,9 +770,19 @@ impl NodeGraph {
                         ui.add(egui::Slider::new(luminance_mix, 0.0..=100.0).text("Luminance Mix"));
                     });
                 
-                // TODO: Color wheels and curves
-                ui.separator();
-                ui.label(egui::RichText::new("Color wheels coming soon").italics().weak());
+                // Color Grading Wheels
+                egui::CollapsingHeader::new("🎨 Color Wheels")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            Self::color_wheel(ui, "Lift", lift);
+                            Self::color_wheel(ui, "Gamma", gamma_wheel);
+                        });
+                        ui.horizontal(|ui| {
+                            Self::color_wheel(ui, "Gain", gain);
+                            Self::color_wheel(ui, "Offset", offset);
+                        });
+                    });
             }
             
             // === Effects Node ===

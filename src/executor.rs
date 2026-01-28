@@ -102,16 +102,26 @@ impl Executor {
             NodeProperties::Adjust { 
                 brightness, contrast, saturation, exposure,
                 highlights, shadows, temperature, tint,
-                vibrance, gamma, ..
+                vibrance, gamma,
+                lift, gamma_wheel, gain, offset, ..
             } => {
                 let input = self.get_input_image(graph, node_id)?;
                 if let Some(img) = input {
-                    let result = self.apply_adjustments(
+                    let mut result = self.apply_adjustments(
                         &img,
                         *brightness, *contrast, *saturation, *exposure,
                         *highlights, *shadows, *temperature, *tint,
                         *vibrance, *gamma
                     );
+                    
+                    // Apply color wheels if any are non-zero
+                    if lift.x.abs() > 0.01 || lift.y.abs() > 0.01 ||
+                       gamma_wheel.x.abs() > 0.01 || gamma_wheel.y.abs() > 0.01 ||
+                       gain.x.abs() > 0.01 || gain.y.abs() > 0.01 ||
+                       offset.x.abs() > 0.01 || offset.y.abs() > 0.01 {
+                        result = self.apply_color_wheels(&result, lift, gamma_wheel, gain, offset);
+                    }
+                    
                     NodeOutput::Image(result)
                 } else {
                     NodeOutput::None
@@ -258,6 +268,80 @@ impl Executor {
     }
     
     // === Image Processing Functions ===
+    
+    /// Apply color wheels (lift/gamma/gain/offset) color grading
+    fn apply_color_wheels(
+        &self,
+        img: &ImageData,
+        lift: &crate::nodes::ColorWheel,
+        gamma_wheel: &crate::nodes::ColorWheel,
+        gain: &crate::nodes::ColorWheel,
+        offset: &crate::nodes::ColorWheel,
+    ) -> ImageData {
+        let mut output = img.pixels.as_ref().clone();
+        
+        // Convert wheel positions to RGB shifts
+        // X/Y position on wheel maps to color tint
+        fn wheel_to_rgb(wheel: &crate::nodes::ColorWheel) -> (f32, f32, f32) {
+            // Angle determines hue, distance determines intensity
+            let angle = wheel.y.atan2(wheel.x);
+            let intensity = (wheel.x * wheel.x + wheel.y * wheel.y).sqrt();
+            
+            // Convert angle to RGB (simplified color wheel)
+            let r = (angle.cos() * 0.5 + 0.5) * intensity;
+            let g = ((angle + std::f32::consts::FRAC_PI_3 * 2.0).cos() * 0.5 + 0.5) * intensity;
+            let b = ((angle + std::f32::consts::FRAC_PI_3 * 4.0).cos() * 0.5 + 0.5) * intensity;
+            
+            // Also apply luminance as overall shift
+            let lum = wheel.luminance / 100.0;
+            
+            (r + lum * 0.5, g + lum * 0.5, b + lum * 0.5)
+        }
+        
+        let (lift_r, lift_g, lift_b) = wheel_to_rgb(lift);
+        let (gamma_r, gamma_g, gamma_b) = wheel_to_rgb(gamma_wheel);
+        let (gain_r, gain_g, gain_b) = wheel_to_rgb(gain);
+        let (offset_r, offset_g, offset_b) = wheel_to_rgb(offset);
+        
+        for chunk in output.chunks_exact_mut(4) {
+            let mut r = chunk[0] as f32 / 255.0;
+            let mut g = chunk[1] as f32 / 255.0;
+            let mut b = chunk[2] as f32 / 255.0;
+            
+            // Apply color grading formula: result = gain * (lift * (1 - x) + x * gamma^x) + offset
+            // Simplified version for real-time:
+            
+            // Lift affects shadows (dark values)
+            r += lift_r * (1.0 - r) * 0.5;
+            g += lift_g * (1.0 - g) * 0.5;
+            b += lift_b * (1.0 - b) * 0.5;
+            
+            // Gamma affects midtones
+            let mid = 0.5;
+            let r_mid_weight = 1.0 - (r - mid).abs() * 2.0;
+            let g_mid_weight = 1.0 - (g - mid).abs() * 2.0;
+            let b_mid_weight = 1.0 - (b - mid).abs() * 2.0;
+            r += gamma_r * r_mid_weight.max(0.0) * 0.5;
+            g += gamma_g * g_mid_weight.max(0.0) * 0.5;
+            b += gamma_b * b_mid_weight.max(0.0) * 0.5;
+            
+            // Gain affects highlights (bright values)
+            r += gain_r * r * 0.5;
+            g += gain_g * g * 0.5;
+            b += gain_b * b * 0.5;
+            
+            // Offset is a flat shift
+            r += offset_r * 0.2;
+            g += offset_g * 0.2;
+            b += offset_b * 0.2;
+            
+            chunk[0] = (r.clamp(0.0, 1.0) * 255.0) as u8;
+            chunk[1] = (g.clamp(0.0, 1.0) * 255.0) as u8;
+            chunk[2] = (b.clamp(0.0, 1.0) * 255.0) as u8;
+        }
+        
+        ImageData::new(output, img.width, img.height)
+    }
     
     /// Apply all adjust node parameters
     fn apply_adjustments(
