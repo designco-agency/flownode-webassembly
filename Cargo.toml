@@ -23,11 +23,9 @@ egui_extras = { version = "0.30", features = ["all_loaders", "image"] }
 # Image processing (no rayon/threads for WASM compatibility)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
-# GPU compute
-wgpu = "24"
-
-# Async runtime for image processing
-pollster = "0.4"
+# GPU compute - disabled for now (causes WASM threading panic)
+# wgpu = "24"
+# pollster = "0.4"
 
 # Logging
 log = "0.4"
