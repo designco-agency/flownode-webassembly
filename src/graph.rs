@@ -112,6 +112,45 @@ impl NodeGraph {
         !self.nodes.is_empty()
     }
     
+    /// Get iterator over nodes (for compatibility layer)
+    pub fn nodes_iter(&self) -> impl Iterator<Item = (&Uuid, &Node)> {
+        self.nodes.iter()
+    }
+    
+    /// Get iterator over connections (for compatibility layer)
+    pub fn connections_iter(&self) -> impl Iterator<Item = &Connection> {
+        self.connections.iter()
+    }
+    
+    /// Get current pan offset
+    pub fn pan_offset(&self) -> Vec2 {
+        self.pan_offset
+    }
+    
+    /// Get current zoom level
+    pub fn zoom(&self) -> f32 {
+        self.zoom
+    }
+    
+    /// Create graph from parts (for loading)
+    pub fn from_parts(nodes: HashMap<Uuid, Node>, connections: Vec<Connection>) -> Self {
+        Self {
+            nodes,
+            connections,
+            selected_node: None,
+            dragging_node: None,
+            pan_offset: Vec2::ZERO,
+            zoom: 1.0,
+            pending_connection: None,
+        }
+    }
+    
+    /// Set pan and zoom (for loading viewport)
+    pub fn set_viewport(&mut self, pan: Vec2, zoom: f32) {
+        self.pan_offset = pan;
+        self.zoom = zoom;
+    }
+    
     pub fn add_node(&mut self, node_type: NodeType) {
         // Place new nodes in the center of the viewport with slight random offset
         let node_count = self.nodes.len() as f32;

@@ -9,6 +9,7 @@ mod app;
 mod nodes;
 mod graph;
 mod ui_components;
+mod compat;
 
 use app::FlowNodeApp;
 
