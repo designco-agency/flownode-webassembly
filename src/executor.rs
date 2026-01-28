@@ -120,9 +120,11 @@ impl Executor {
             
             // === Effects Node ===
             NodeProperties::Effects {
-                gaussian_blur, grain, sharpen, vignette,
-                vignette_roundness, vignette_smoothness,
-                grain_monochrome, ..
+                gaussian_blur, directional_blur, directional_blur_angle,
+                progressive_blur, progressive_blur_direction, progressive_blur_falloff,
+                glass_blinds, glass_blinds_frequency, glass_blinds_angle, glass_blinds_phase,
+                grain, grain_size, grain_monochrome, grain_seed,
+                sharpen, vignette, vignette_roundness, vignette_smoothness
             } => {
                 let input = self.get_input_image(graph, node_id)?;
                 if let Some(img) = input {
@@ -132,11 +134,20 @@ impl Executor {
                     if *gaussian_blur > 0.0 {
                         result = self.apply_blur(&result, (*gaussian_blur * 0.5) as u32);
                     }
+                    if *directional_blur > 0.0 {
+                        result = self.apply_directional_blur(&result, *directional_blur / 100.0, *directional_blur_angle);
+                    }
+                    if *progressive_blur > 0.0 {
+                        result = self.apply_progressive_blur(&result, *progressive_blur / 100.0, progressive_blur_direction, *progressive_blur_falloff / 100.0);
+                    }
+                    if *glass_blinds > 0.0 {
+                        result = self.apply_glass_blinds(&result, *glass_blinds / 100.0, *glass_blinds_frequency, *glass_blinds_angle, *glass_blinds_phase / 100.0);
+                    }
                     if *sharpen > 0.0 {
                         result = self.apply_sharpen(&result, *sharpen / 100.0);
                     }
                     if *grain > 0.0 {
-                        result = self.apply_grain(&result, *grain / 100.0, *grain_monochrome);
+                        result = self.apply_grain_advanced(&result, *grain / 100.0, *grain_size, *grain_monochrome, *grain_seed);
                     }
                     if *vignette > 0.0 {
                         result = self.apply_vignette(&result, *vignette / 100.0, *vignette_roundness / 100.0, *vignette_smoothness / 100.0);
@@ -488,6 +499,189 @@ impl Executor {
                 let idx = ((y * img.width + x) * 4) as usize;
                 for c in 0..3 {
                     output[idx + c] = (output[idx + c] as f32 * vignette).clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        
+        ImageData::new(output, img.width, img.height)
+    }
+    
+    /// Apply directional (motion) blur
+    fn apply_directional_blur(&self, img: &ImageData, amount: f32, angle: f32) -> ImageData {
+        let mut output = img.pixels.as_ref().clone();
+        let width = img.width as i32;
+        let height = img.height as i32;
+        
+        // Convert angle to radians and calculate direction
+        let angle_rad = angle.to_radians();
+        let dx = angle_rad.cos();
+        let dy = angle_rad.sin();
+        
+        // Number of samples based on amount
+        let samples = (amount * 20.0).max(1.0) as i32;
+        
+        for y in 0..height {
+            for x in 0..width {
+                let mut r_sum = 0.0f32;
+                let mut g_sum = 0.0f32;
+                let mut b_sum = 0.0f32;
+                let mut count = 0.0f32;
+                
+                for i in -samples..=samples {
+                    let sx = (x as f32 + dx * i as f32) as i32;
+                    let sy = (y as f32 + dy * i as f32) as i32;
+                    
+                    if sx >= 0 && sx < width && sy >= 0 && sy < height {
+                        let idx = ((sy * width + sx) * 4) as usize;
+                        r_sum += img.pixels[idx] as f32;
+                        g_sum += img.pixels[idx + 1] as f32;
+                        b_sum += img.pixels[idx + 2] as f32;
+                        count += 1.0;
+                    }
+                }
+                
+                let idx = ((y * width + x) * 4) as usize;
+                output[idx] = (r_sum / count) as u8;
+                output[idx + 1] = (g_sum / count) as u8;
+                output[idx + 2] = (b_sum / count) as u8;
+            }
+        }
+        
+        ImageData::new(output, img.width, img.height)
+    }
+    
+    /// Apply progressive (gradient) blur
+    fn apply_progressive_blur(&self, img: &ImageData, amount: f32, direction: &crate::nodes::BlurDirection, falloff: f32) -> ImageData {
+        use crate::nodes::BlurDirection;
+        
+        let width = img.width;
+        let height = img.height;
+        let mut output = img.pixels.as_ref().clone();
+        
+        // Pre-compute blur levels
+        let max_radius = (amount * 25.0) as u32;
+        
+        for y in 0..height {
+            for x in 0..width {
+                // Calculate blur factor based on position and direction
+                let factor = match direction {
+                    BlurDirection::Top => 1.0 - (y as f32 / height as f32),
+                    BlurDirection::Bottom => y as f32 / height as f32,
+                    BlurDirection::Left => 1.0 - (x as f32 / width as f32),
+                    BlurDirection::Right => x as f32 / width as f32,
+                };
+                
+                // Apply falloff curve
+                let blur_factor = (factor / falloff.max(0.01)).min(1.0).powf(2.0);
+                let radius = (blur_factor * max_radius as f32) as i32;
+                
+                if radius > 0 {
+                    let mut r_sum = 0u32;
+                    let mut g_sum = 0u32;
+                    let mut b_sum = 0u32;
+                    let mut count = 0u32;
+                    
+                    for dy in -radius..=radius {
+                        for dx in -radius..=radius {
+                            let sx = (x as i32 + dx).clamp(0, width as i32 - 1) as u32;
+                            let sy = (y as i32 + dy).clamp(0, height as i32 - 1) as u32;
+                            let idx = ((sy * width + sx) * 4) as usize;
+                            r_sum += img.pixels[idx] as u32;
+                            g_sum += img.pixels[idx + 1] as u32;
+                            b_sum += img.pixels[idx + 2] as u32;
+                            count += 1;
+                        }
+                    }
+                    
+                    let idx = ((y * width + x) * 4) as usize;
+                    output[idx] = (r_sum / count) as u8;
+                    output[idx + 1] = (g_sum / count) as u8;
+                    output[idx + 2] = (b_sum / count) as u8;
+                }
+            }
+        }
+        
+        ImageData::new(output, img.width, img.height)
+    }
+    
+    /// Apply glass blinds effect (wave distortion)
+    fn apply_glass_blinds(&self, img: &ImageData, intensity: f32, frequency: f32, angle: f32, phase: f32) -> ImageData {
+        let mut output = img.pixels.as_ref().clone();
+        let width = img.width as f32;
+        let height = img.height as f32;
+        
+        let angle_rad = angle.to_radians();
+        let cos_a = angle_rad.cos();
+        let sin_a = angle_rad.sin();
+        
+        for y in 0..img.height {
+            for x in 0..img.width {
+                // Rotate coordinates
+                let rx = x as f32 * cos_a + y as f32 * sin_a;
+                
+                // Calculate wave displacement
+                let wave = ((rx * frequency / 100.0 + phase * std::f32::consts::PI * 2.0).sin() * intensity * 20.0) as i32;
+                
+                // Calculate source coordinates
+                let sx = (x as i32 - (wave as f32 * sin_a) as i32).clamp(0, img.width as i32 - 1) as u32;
+                let sy = (y as i32 + (wave as f32 * cos_a) as i32).clamp(0, img.height as i32 - 1) as u32;
+                
+                let src_idx = ((sy * img.width + sx) * 4) as usize;
+                let dst_idx = ((y * img.width + x) * 4) as usize;
+                
+                output[dst_idx] = img.pixels[src_idx];
+                output[dst_idx + 1] = img.pixels[src_idx + 1];
+                output[dst_idx + 2] = img.pixels[src_idx + 2];
+            }
+        }
+        
+        ImageData::new(output, img.width, img.height)
+    }
+    
+    /// Apply film grain with size control
+    fn apply_grain_advanced(&self, img: &ImageData, amount: f32, size: f32, monochrome: bool, seed: u32) -> ImageData {
+        let mut output = img.pixels.as_ref().clone();
+        let width = img.width;
+        let height = img.height;
+        
+        // Use seed for reproducible noise
+        let mut rng_state = seed.wrapping_add(12345);
+        
+        // Size determines the grain "block" size
+        let block_size = size.max(1.0) as u32;
+        
+        for by in (0..height).step_by(block_size as usize) {
+            for bx in (0..width).step_by(block_size as usize) {
+                // Generate noise for this block
+                rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+                let noise_val = ((rng_state >> 16) & 0xFF) as f32 / 255.0 - 0.5;
+                let noise = noise_val * 2.0 * amount * 50.0;
+                
+                // Color noise if not monochrome
+                let (nr, ng, nb) = if monochrome {
+                    (noise, noise, noise)
+                } else {
+                    rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+                    let nr = ((rng_state >> 16) & 0xFF) as f32 / 255.0 - 0.5;
+                    rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+                    let ng = ((rng_state >> 16) & 0xFF) as f32 / 255.0 - 0.5;
+                    rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+                    let nb = ((rng_state >> 16) & 0xFF) as f32 / 255.0 - 0.5;
+                    (nr * 2.0 * amount * 50.0, ng * 2.0 * amount * 50.0, nb * 2.0 * amount * 50.0)
+                };
+                
+                // Apply to all pixels in block
+                for dy in 0..block_size {
+                    for dx in 0..block_size {
+                        let x = bx + dx;
+                        let y = by + dy;
+                        if x < width && y < height {
+                            let idx = ((y * width + x) * 4) as usize;
+                            output[idx] = (output[idx] as f32 + nr).clamp(0.0, 255.0) as u8;
+                            output[idx + 1] = (output[idx + 1] as f32 + ng).clamp(0.0, 255.0) as u8;
+                            output[idx + 2] = (output[idx + 2] as f32 + nb).clamp(0.0, 255.0) as u8;
+                        }
+                    }
                 }
             }
         }
