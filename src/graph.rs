@@ -120,6 +120,26 @@ impl NodeGraph {
         }
     }
     
+    /// Get a clone of the selected node (for copy)
+    pub fn get_selected_node_clone(&self) -> Option<Node> {
+        self.selected_node.and_then(|id| self.nodes.get(&id).cloned())
+    }
+    
+    /// Paste a node (create a copy with new ID and offset position)
+    pub fn paste_node(&mut self, node: &Node) -> Uuid {
+        let mut new_node = node.clone();
+        new_node.id = Uuid::new_v4();
+        new_node.position.x += 30.0;
+        new_node.position.y += 30.0;
+        
+        let node_id = new_node.id;
+        self.nodes.insert(node_id, new_node);
+        self.selected_node = Some(node_id);
+        
+        log::info!("Pasted node {:?}", node_id);
+        node_id
+    }
+    
     /// Delete a specific connection
     pub fn delete_connection(&mut self, from_node: Uuid, from_slot: usize, to_node: Uuid, to_slot: usize) {
         self.connections.retain(|c| {

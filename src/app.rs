@@ -41,6 +41,9 @@ pub struct FlowNodeApp {
     /// Node graph executor
     executor: Executor,
     
+    /// Clipboard for copy/paste
+    clipboard: Option<crate::nodes::Node>,
+    
     /// Output image from last execution
     output_image: Option<ImageData>,
     
@@ -78,6 +81,7 @@ impl FlowNodeApp {
             executor: Executor::new(),
             output_image: None,
             output_texture: None,
+            clipboard: None,
             status_message: None,
         }
     }
@@ -182,6 +186,30 @@ impl FlowNodeApp {
             // Ctrl+G = Run graph (like Execute in React)
             if ctrl && i.key_pressed(egui::Key::G) && !shift {
                 // Will call run_graph after this closure
+            }
+            
+            // Ctrl+C = Copy selected node
+            if ctrl && i.key_pressed(egui::Key::C) {
+                if let Some(node) = self.graph.get_selected_node_clone() {
+                    self.clipboard = Some(node);
+                    log::info!("Copied node to clipboard");
+                }
+            }
+            
+            // Ctrl+V = Paste node
+            if ctrl && i.key_pressed(egui::Key::V) {
+                if let Some(ref node) = self.clipboard.clone() {
+                    self.graph.paste_node(node);
+                    log::info!("Pasted node from clipboard");
+                }
+            }
+            
+            // Ctrl+D = Duplicate selected node
+            if ctrl && i.key_pressed(egui::Key::D) {
+                if let Some(node) = self.graph.get_selected_node_clone() {
+                    self.graph.paste_node(&node);
+                    log::info!("Duplicated node");
+                }
             }
             
             // Escape = Deselect / cancel
@@ -522,7 +550,7 @@ impl eframe::App for FlowNodeApp {
                 }
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label("A=Adjust E=Effects I=Image | Del=Delete | Ctrl+G=Run");
+                    ui.label("A=Adjust E=Effects | Ctrl+C/V=Copy/Paste | Ctrl+G=Run");
                 });
             });
         });
