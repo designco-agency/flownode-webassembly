@@ -12,6 +12,7 @@ mod ui_components;
 mod compat;
 mod image_data;
 mod gpu;
+mod executor;
 
 use app::FlowNodeApp;
 
