@@ -4,6 +4,7 @@ use eframe::egui;
 use std::collections::HashMap;
 use crate::graph::NodeGraph;
 use crate::image_data::{ImageData, TextureHandle};
+use crate::executor::Executor;
 
 #[cfg(target_arch = "wasm32")]
 use js_sys;
@@ -36,6 +37,15 @@ pub struct FlowNodeApp {
     
     /// Pending image load (node ID waiting for image)
     pending_image_load: Option<uuid::Uuid>,
+    
+    /// Node graph executor
+    executor: Executor,
+    
+    /// Output image from last execution
+    output_image: Option<ImageData>,
+    
+    /// Output texture for display
+    output_texture: Option<TextureHandle>,
 }
 
 impl FlowNodeApp {
@@ -62,6 +72,9 @@ impl FlowNodeApp {
             next_image_id: 1,
             pending_image_load: None,
             dark_mode: true,
+            executor: Executor::new(),
+            output_image: None,
+            output_texture: None,
         }
     }
     
@@ -107,6 +120,65 @@ impl FlowNodeApp {
     /// Get texture handle by ID
     pub fn get_texture(&self, image_id: u64) -> Option<&TextureHandle> {
         self.textures.get(&image_id)
+    }
+    
+    /// Export the output image
+    fn export_output(&self) {
+        if let Some(output) = &self.output_image {
+            match crate::image_data::encode_png(output) {
+                Ok(png_bytes) => {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        // Download via JavaScript
+                        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_bytes);
+                        let js_code = format!(
+                            r#"
+                            const link = document.createElement('a');
+                            link.href = 'data:image/png;base64,{}';
+                            link.download = 'flownode-output.png';
+                            link.click();
+                            "#,
+                            encoded
+                        );
+                        let _ = js_sys::eval(&js_code);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        log::info!("Export: {} bytes PNG", png_bytes.len());
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to encode PNG: {}", e);
+                }
+            }
+        }
+    }
+    
+    /// Run the node graph and produce output
+    fn run_graph(&mut self, ctx: &egui::Context) {
+        log::info!("Running node graph...");
+        
+        match self.executor.execute(&self.graph, &self.images) {
+            Ok(Some(output)) => {
+                log::info!("Execution successful! Output: {}x{}", output.width, output.height);
+                
+                // Create texture for display
+                let texture = TextureHandle::from_image_data(
+                    ctx,
+                    "output",
+                    &output,
+                );
+                
+                self.output_texture = Some(texture);
+                self.output_image = Some(output);
+            }
+            Ok(None) => {
+                log::info!("Execution complete, no output (no output node connected)");
+            }
+            Err(e) => {
+                log::error!("Execution failed: {}", e);
+            }
+        }
     }
 }
 
@@ -178,8 +250,18 @@ impl eframe::App for FlowNodeApp {
                     }
                 });
                 
+                // Run button
+                ui.separator();
+                if ui.button("▶ Run").clicked() {
+                    self.run_graph(ctx);
+                }
+                
                 // Right-aligned status
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.output_image.is_some() {
+                        ui.label("✅ Output ready");
+                        ui.separator();
+                    }
                     ui.label(format!("Zoom: {:.0}%", self.zoom * 100.0));
                     ui.separator();
                     ui.label(format!("{} nodes", self.graph.node_count()));
@@ -260,7 +342,7 @@ impl eframe::App for FlowNodeApp {
                 });
         }
         
-        // Right panel: Properties
+        // Right panel: Properties + Output Preview
         if self.show_properties {
             egui::SidePanel::right("properties")
                 .resizable(true)
@@ -274,6 +356,33 @@ impl eframe::App for FlowNodeApp {
                         self.graph.show_node_properties(ui, node_id);
                     } else {
                         ui.label("Select a node to view properties");
+                    }
+                    
+                    // Output Preview
+                    if let Some(texture) = &self.output_texture {
+                        ui.separator();
+                        ui.heading("Output Preview");
+                        
+                        // Calculate scaled size to fit panel
+                        let max_size = 250.0;
+                        let aspect = texture.size[0] as f32 / texture.size[1] as f32;
+                        let (w, h) = if aspect > 1.0 {
+                            (max_size, max_size / aspect)
+                        } else {
+                            (max_size * aspect, max_size)
+                        };
+                        
+                        ui.image(egui::ImageSource::Texture(egui::load::SizedTexture {
+                            id: texture.handle.id(),
+                            size: egui::vec2(w, h),
+                        }));
+                        
+                        ui.label(format!("{}×{}", texture.size[0], texture.size[1]));
+                        
+                        // Export button
+                        if ui.button("💾 Export PNG").clicked() {
+                            self.export_output();
+                        }
                     }
                 });
         }
