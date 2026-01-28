@@ -23,6 +23,9 @@ egui_extras = { version = "0.30", features = ["all_loaders", "image"] }
 # Image processing
 image = "0.25"
 
+# GPU compute
+wgpu = "24"
+
 # Async runtime for image processing
 pollster = "0.4"
 

@@ -11,6 +11,7 @@ mod graph;
 mod ui_components;
 mod compat;
 mod image_data;
+mod gpu;
 
 use app::FlowNodeApp;
 
