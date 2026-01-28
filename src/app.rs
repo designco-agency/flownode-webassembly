@@ -46,6 +46,9 @@ pub struct FlowNodeApp {
     
     /// Output texture for display
     output_texture: Option<TextureHandle>,
+    
+    /// Status message for user feedback
+    status_message: Option<(String, std::time::Instant)>,
 }
 
 impl FlowNodeApp {
@@ -75,7 +78,13 @@ impl FlowNodeApp {
             executor: Executor::new(),
             output_image: None,
             output_texture: None,
+            status_message: None,
         }
+    }
+    
+    /// Set a status message that auto-expires after 3 seconds
+    fn set_status(&mut self, message: &str) {
+        self.status_message = Some((message.to_string(), std::time::Instant::now()));
     }
     
     /// Load image from bytes and assign to selected node or create new node
@@ -92,11 +101,14 @@ impl FlowNodeApp {
                     &image_data,
                 );
                 
-                log::info!("Loaded image {}x{}", image_data.width, image_data.height);
+                let msg = format!("✓ Loaded image {}×{}", image_data.width, image_data.height);
+                log::info!("{}", msg);
                 
                 // Store the image and texture
                 self.images.insert(image_id, image_data);
                 self.textures.insert(image_id, texture);
+                
+                self.set_status(&msg);
                 
                 // Assign to selected node if it's an ImageInput, otherwise create new
                 if let Some(node_id) = self.graph.selected_node() {
@@ -157,10 +169,13 @@ impl FlowNodeApp {
     /// Run the node graph and produce output
     fn run_graph(&mut self, ctx: &egui::Context) {
         log::info!("Running node graph...");
+        let start = std::time::Instant::now();
         
         match self.executor.execute(&self.graph, &self.images) {
             Ok(Some(output)) => {
-                log::info!("Execution successful! Output: {}x{}", output.width, output.height);
+                let elapsed = start.elapsed();
+                let msg = format!("✓ Processed {}×{} in {:.0}ms", output.width, output.height, elapsed.as_secs_f64() * 1000.0);
+                log::info!("{}", msg);
                 
                 // Create texture for display
                 let texture = TextureHandle::from_image_data(
@@ -171,11 +186,14 @@ impl FlowNodeApp {
                 
                 self.output_texture = Some(texture);
                 self.output_image = Some(output);
+                self.set_status(&msg);
             }
             Ok(None) => {
+                self.set_status("⚠ No output (connect nodes to Output)");
                 log::info!("Execution complete, no output (no output node connected)");
             }
             Err(e) => {
+                self.set_status(&format!("✗ Error: {}", e));
                 log::error!("Execution failed: {}", e);
             }
         }
@@ -412,6 +430,22 @@ impl eframe::App for FlowNodeApp {
         if ctx.input(|i| i.key_pressed(egui::Key::R) && !i.modifiers.ctrl && !i.modifiers.command) {
             self.run_graph(ctx);
         }
+        
+        // Bottom status bar
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                // Status message (expires after 3 seconds)
+                if let Some((msg, time)) = &self.status_message {
+                    if time.elapsed().as_secs() < 3 {
+                        ui.label(egui::RichText::new(msg).color(egui::Color32::LIGHT_GREEN));
+                    }
+                }
+                
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label("Press R to run | Delete to remove node | Drag to connect");
+                });
+            });
+        });
         
         // Request continuous repaint for smooth 60fps (game engine style)
         ctx.request_repaint();
