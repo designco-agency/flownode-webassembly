@@ -73,6 +73,30 @@ impl NodeGraph {
         self.selected_node
     }
     
+    /// Delete a node and all its connections
+    pub fn delete_node(&mut self, node_id: Uuid) {
+        // Remove all connections involving this node
+        self.connections.retain(|c| c.from_node != node_id && c.to_node != node_id);
+        
+        // Remove the node
+        self.nodes.remove(&node_id);
+        
+        // Clear selection if this was the selected node
+        if self.selected_node == Some(node_id) {
+            self.selected_node = None;
+        }
+        
+        log::info!("Deleted node {:?}", node_id);
+    }
+    
+    /// Delete a specific connection
+    pub fn delete_connection(&mut self, from_node: Uuid, from_slot: usize, to_node: Uuid, to_slot: usize) {
+        self.connections.retain(|c| {
+            !(c.from_node == from_node && c.from_slot == from_slot && 
+              c.to_node == to_node && c.to_slot == to_slot)
+        });
+    }
+    
     pub fn add_node(&mut self, node_type: NodeType) {
         // Place new nodes in the center of the viewport with slight random offset
         let node_count = self.nodes.len() as f32;
@@ -157,6 +181,13 @@ impl NodeGraph {
         // Handle click to deselect
         if response.clicked() && self.selected_node.is_some() {
             self.selected_node = None;
+        }
+        
+        // Keyboard shortcuts
+        if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+            if let Some(node_id) = self.selected_node {
+                self.delete_node(node_id);
+            }
         }
         
         // Cancel pending connection on right click or release without target
@@ -327,10 +358,16 @@ impl NodeGraph {
                 egui::Color32::GRAY,
             );
             
+            // Check if this input already has a connection
+            let has_connection = self.connections.iter().any(|c| c.to_node == node_id && c.to_slot == i);
+            
             // Handle connection drop on input slot
             if slot_response.hovered() && ui.input(|i| i.pointer.any_released()) {
                 if let Some(pending) = &self.pending_connection {
                     if pending.is_output && pending.from_node != node_id {
+                        // Remove existing connection to this input (only one connection per input)
+                        self.connections.retain(|c| !(c.to_node == node_id && c.to_slot == i));
+                        
                         // Complete the connection
                         let new_conn = Connection {
                             from_node: pending.from_node,
@@ -342,6 +379,12 @@ impl NodeGraph {
                         log::info!("Connection created: {:?} -> {:?}", pending.from_node, node_id);
                     }
                 }
+            }
+            
+            // Click on connected input to delete connection
+            if slot_response.clicked() && has_connection && self.pending_connection.is_none() {
+                self.connections.retain(|c| !(c.to_node == node_id && c.to_slot == i));
+                log::info!("Connection deleted from input slot");
             }
         }
         
