@@ -140,6 +140,30 @@ impl NodeGraph {
         node_id
     }
     
+    /// Insert a node directly (for cloud loading)
+    pub fn insert_node(&mut self, node: Node) {
+        let node_id = node.id;
+        self.nodes.insert(node_id, node);
+    }
+    
+    /// Add a connection between nodes
+    pub fn add_connection(&mut self, from_node: Uuid, from_slot: usize, to_node: Uuid, to_slot: usize) {
+        // Check if connection already exists
+        let exists = self.connections.iter().any(|c| 
+            c.from_node == from_node && c.from_slot == from_slot &&
+            c.to_node == to_node && c.to_slot == to_slot
+        );
+        
+        if !exists {
+            self.connections.push(Connection {
+                from_node,
+                from_slot,
+                to_node,
+                to_slot,
+            });
+        }
+    }
+    
     /// Delete a specific connection
     pub fn delete_connection(&mut self, from_node: Uuid, from_slot: usize, to_node: Uuid, to_slot: usize) {
         self.connections.retain(|c| {

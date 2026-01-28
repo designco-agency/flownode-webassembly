@@ -370,18 +370,15 @@ impl FlowNodeApp {
                     if !json_str.is_empty() {
                         self.cloud_load_pending = false;
                         
-                        // Parse the cloud data and convert to our format
-                        if let Ok(cloud_data) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                            log::info!("Cloud data received: {:?}", cloud_data.get("name"));
-                            
-                            // Extract nodes and convert
-                            if let Some(nodes) = cloud_data.get("nodes") {
-                                log::info!("Found {} nodes", nodes.as_array().map(|a| a.len()).unwrap_or(0));
-                                // For now, just report success - full conversion TODO
-                                self.set_status(&format!("✓ Loaded: {} ({} nodes)", 
-                                    cloud_data.get("name").and_then(|n| n.as_str()).unwrap_or("Untitled"),
-                                    nodes.as_array().map(|a| a.len()).unwrap_or(0)
-                                ));
+                        // Parse and convert the cloud data
+                        match self.convert_cloud_workflow(&json_str) {
+                            Ok((node_count, edge_count, name)) => {
+                                self.set_status(&format!("✓ Loaded: {} ({} nodes, {} edges)", 
+                                    name, node_count, edge_count));
+                            }
+                            Err(e) => {
+                                log::error!("Failed to convert workflow: {}", e);
+                                self.set_status(&format!("✗ Load failed: {}", e));
                             }
                         }
                         
@@ -389,6 +386,174 @@ impl FlowNodeApp {
                         let _ = js_sys::eval("window.__flownode_cloud_data = null");
                     }
                 }
+            }
+        }
+    }
+    
+    /// Convert React Flow workflow JSON to our internal format
+    fn convert_cloud_workflow(&mut self, json_str: &str) -> Result<(usize, usize, String), String> {
+        let cloud_data: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+        
+        let name = cloud_data.get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("Untitled")
+            .to_string();
+        
+        let nodes = cloud_data.get("nodes")
+            .and_then(|n| n.as_array())
+            .ok_or("No nodes array")?;
+        
+        let empty_edges = vec![];
+        let edges = cloud_data.get("edges")
+            .and_then(|e| e.as_array())
+            .unwrap_or(&empty_edges);
+        
+        // Clear current graph
+        self.graph = crate::graph::NodeGraph::new();
+        
+        // Map of old IDs to new UUIDs
+        let mut id_map: std::collections::HashMap<String, uuid::Uuid> = std::collections::HashMap::new();
+        
+        // Convert nodes
+        for node in nodes {
+            let old_id = node.get("id").and_then(|i| i.as_str()).unwrap_or("");
+            let node_type_str = node.get("type").and_then(|t| t.as_str()).unwrap_or("image");
+            let x = node.get("position")
+                .and_then(|p| p.get("x"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(100.0) as f32;
+            let y = node.get("position")
+                .and_then(|p| p.get("y"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(100.0) as f32;
+            
+            // Convert React Flow type to our NodeType
+            let node_type = match node_type_str {
+                "image" => crate::nodes::NodeType::Image,
+                "content" => crate::nodes::NodeType::Content,
+                "bucket" => crate::nodes::NodeType::Bucket,
+                "adjust" => crate::nodes::NodeType::Adjust,
+                "effects" => crate::nodes::NodeType::Effects,
+                "text" => crate::nodes::NodeType::Text,
+                "concat" => crate::nodes::NodeType::Concat,
+                "splitter" => crate::nodes::NodeType::Splitter,
+                "postit" => crate::nodes::NodeType::Postit,
+                "compare" => crate::nodes::NodeType::Compare,
+                "composition" => crate::nodes::NodeType::Composition,
+                "router" => crate::nodes::NodeType::Router,
+                "batch" => crate::nodes::NodeType::Batch,
+                "title" => crate::nodes::NodeType::Title,
+                "omni" => crate::nodes::NodeType::Omni,
+                "llm" => crate::nodes::NodeType::Llm,
+                "video" => crate::nodes::NodeType::Video,
+                "upscaler" => crate::nodes::NodeType::Upscaler,
+                "vector" => crate::nodes::NodeType::Vector,
+                "rodin3d" => crate::nodes::NodeType::Rodin3d,
+                "mind-map" => crate::nodes::NodeType::MindMap,
+                _ => {
+                    log::warn!("Unknown node type: {}, defaulting to Image", node_type_str);
+                    crate::nodes::NodeType::Image
+                }
+            };
+            
+            // Create node at the correct position
+            let mut new_node = crate::nodes::Node::new(node_type, egui::Vec2::new(x, y));
+            
+            // Try to extract and apply node data/settings
+            if let Some(data) = node.get("data") {
+                self.apply_node_data(&mut new_node, data);
+            }
+            
+            let new_id = new_node.id;
+            id_map.insert(old_id.to_string(), new_id);
+            self.graph.insert_node(new_node);
+        }
+        
+        // Convert edges to connections
+        for edge in edges {
+            let source = edge.get("source").and_then(|s| s.as_str()).unwrap_or("");
+            let target = edge.get("target").and_then(|t| t.as_str()).unwrap_or("");
+            
+            // Parse handle indices (format: "output-0", "input-0")
+            let source_slot = edge.get("sourceHandle")
+                .and_then(|h| h.as_str())
+                .and_then(|h| h.strip_prefix("output-"))
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            
+            let target_slot = edge.get("targetHandle")
+                .and_then(|h| h.as_str())
+                .and_then(|h| h.strip_prefix("input-"))
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            
+            if let (Some(&from_id), Some(&to_id)) = (id_map.get(source), id_map.get(target)) {
+                self.graph.add_connection(from_id, source_slot, to_id, target_slot);
+            }
+        }
+        
+        // Apply viewport if present
+        if let Some(viewport) = cloud_data.get("viewport") {
+            let _x = viewport.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let _y = viewport.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let _zoom = viewport.get("zoom").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+            // TODO: Apply viewport to graph
+        }
+        
+        log::info!("Converted {} nodes and {} edges", nodes.len(), edges.len());
+        Ok((nodes.len(), edges.len(), name))
+    }
+    
+    /// Apply React Flow node data to our node properties
+    fn apply_node_data(&self, node: &mut crate::nodes::Node, data: &serde_json::Value) {
+        match &mut node.properties {
+            crate::nodes::NodeProperties::Adjust { 
+                brightness, contrast, saturation, exposure,
+                highlights, shadows, temperature, tint,
+                vibrance, gamma, ..
+            } => {
+                if let Some(settings) = data.get("settings") {
+                    *brightness = settings.get("brightness").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *contrast = settings.get("contrast").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *saturation = settings.get("saturation").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *exposure = settings.get("exposure").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *highlights = settings.get("highlights").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *shadows = settings.get("shadows").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *temperature = settings.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *tint = settings.get("tint").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *vibrance = settings.get("vibrance").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *gamma = settings.get("gamma").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                }
+            }
+            crate::nodes::NodeProperties::Effects {
+                gaussian_blur, sharpen, grain, vignette, ..
+            } => {
+                if let Some(settings) = data.get("settings") {
+                    *gaussian_blur = settings.get("gaussianBlur").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *sharpen = settings.get("sharpen").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *grain = settings.get("grain").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    *vignette = settings.get("vignette").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                }
+            }
+            crate::nodes::NodeProperties::Text { text } => {
+                if let Some(t) = data.get("text").and_then(|t| t.as_str()) {
+                    *text = t.to_string();
+                }
+            }
+            crate::nodes::NodeProperties::Omni { prompt, negative_prompt, model, .. } => {
+                if let Some(p) = data.get("prompt").and_then(|p| p.as_str()) {
+                    *prompt = p.to_string();
+                }
+                if let Some(np) = data.get("negativePrompt").and_then(|p| p.as_str()) {
+                    *negative_prompt = np.to_string();
+                }
+                if let Some(m) = data.get("model").and_then(|m| m.as_str()) {
+                    *model = m.to_string();
+                }
+            }
+            _ => {
+                // Other node types - use defaults
             }
         }
     }
