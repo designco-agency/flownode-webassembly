@@ -97,6 +97,21 @@ impl NodeGraph {
         });
     }
     
+    /// Serialize the graph to JSON
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+    
+    /// Deserialize the graph from JSON
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+    
+    /// Check if graph has unsaved changes (always true for now, could track dirty state)
+    pub fn is_dirty(&self) -> bool {
+        !self.nodes.is_empty()
+    }
+    
     pub fn add_node(&mut self, node_type: NodeType) {
         // Place new nodes in the center of the viewport with slight random offset
         let node_count = self.nodes.len() as f32;

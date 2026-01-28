@@ -3,6 +3,9 @@
 use eframe::egui;
 use crate::graph::NodeGraph;
 
+#[cfg(target_arch = "wasm32")]
+use js_sys;
+
 /// The main FlowNode application
 pub struct FlowNodeApp {
     /// The node graph editor
@@ -56,11 +59,37 @@ impl eframe::App for FlowNodeApp {
                         ui.close_menu();
                     }
                     if ui.button("Open...").clicked() {
-                        // TODO: File dialog
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            // Trigger file input click via JS
+                            let _ = js_sys::eval("document.getElementById('file-input')?.click()");
+                        }
                         ui.close_menu();
                     }
                     if ui.button("Save").clicked() {
-                        // TODO: Save
+                        if let Ok(json) = self.graph.to_json() {
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                // Download JSON file via JS
+                                let js_code = format!(
+                                    r#"
+                                    const blob = new Blob([`{}`], {{type: 'application/json'}});
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = 'flownode-project.json';
+                                    a.click();
+                                    URL.revokeObjectURL(url);
+                                    "#,
+                                    json.replace('`', "\\`").replace("${", "\\${")
+                                );
+                                let _ = js_sys::eval(&js_code);
+                            }
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                log::info!("Save: {}", json);
+                            }
+                        }
                         ui.close_menu();
                     }
                     ui.separator();
