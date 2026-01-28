@@ -47,6 +47,9 @@ pub struct FlowNodeApp {
     /// Waiting for cloud load to complete
     cloud_load_pending: bool,
     
+    /// Waiting for cloud save to complete
+    cloud_save_pending: bool,
+    
     /// Output image from last execution
     output_image: Option<ImageData>,
     
@@ -86,6 +89,7 @@ impl FlowNodeApp {
             output_texture: None,
             clipboard: None,
             cloud_load_pending: false,
+            cloud_save_pending: false,
             status_message: None,
         };
         
@@ -301,6 +305,235 @@ impl FlowNodeApp {
         {
             log::info!("Local storage save only available in browser");
             self.set_status("⚠ Save only available in browser");
+        }
+    }
+    
+    /// Save workflow to Supabase cloud as a NEW workflow
+    fn save_to_cloud_new(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            use crate::cloud::{SUPABASE_URL, SUPABASE_ANON_KEY};
+            
+            // Convert graph to React Flow format
+            let workflow_json = self.convert_to_react_flow();
+            
+            // Generate new UUID for the workflow
+            let new_id = uuid::Uuid::new_v4().to_string();
+            let timestamp = js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default();
+            
+            // Build the insert payload
+            let payload = serde_json::json!({
+                "id": new_id,
+                "name": format!("WASM Export {}", &timestamp[0..10]),
+                "nodes": workflow_json.get("nodes").unwrap_or(&serde_json::Value::Null),
+                "edges": workflow_json.get("edges").unwrap_or(&serde_json::Value::Null),
+                "viewport": { "x": 0, "y": 0, "zoom": 1 },
+                "is_public": false,
+                "user_email": "wasm@flownode.io",
+                "created_at": timestamp.clone(),
+                "updated_at": timestamp
+            });
+            
+            let payload_str = serde_json::to_string(&payload).unwrap_or_default();
+            
+            let js_code = format!(
+                r#"
+                (async () => {{
+                    try {{
+                        const resp = await fetch('{}/rest/v1/workflows', {{
+                            method: 'POST',
+                            headers: {{
+                                'apikey': '{}',
+                                'Authorization': 'Bearer {}',
+                                'Content-Type': 'application/json',
+                                'Prefer': 'return=representation'
+                            }},
+                            body: '{}'
+                        }});
+                        if (!resp.ok) {{
+                            const err = await resp.text();
+                            console.error('Save failed:', resp.status, err);
+                            window.__flownode_save_result = 'error:' + resp.status;
+                        }} else {{
+                            const data = await resp.json();
+                            console.log('Saved workflow:', data);
+                            window.__flownode_save_result = 'ok:' + (data[0]?.id || '{}');
+                        }}
+                    }} catch(e) {{
+                        console.error('Save error:', e);
+                        window.__flownode_save_result = 'error:' + e.message;
+                    }}
+                }})();
+                "#,
+                SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_ANON_KEY, 
+                payload_str.replace('\\', "\\\\").replace('\'', "\\'"),
+                new_id
+            );
+            let _ = js_sys::eval(&js_code);
+            self.set_status("☁️ Saving to cloud...");
+            self.cloud_save_pending = true;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.set_status("⚠ Cloud sync only in browser");
+        }
+    }
+    
+    /// Convert internal graph to React Flow JSON format
+    fn convert_to_react_flow(&self) -> serde_json::Value {
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        
+        // Convert nodes
+        for (id, node) in &self.graph.nodes {
+            let node_type = match node.node_type {
+                crate::nodes::NodeType::Image => "image",
+                crate::nodes::NodeType::Content => "content",
+                crate::nodes::NodeType::Bucket => "bucket",
+                crate::nodes::NodeType::Adjust => "adjust",
+                crate::nodes::NodeType::Effects => "effects",
+                crate::nodes::NodeType::Text => "text",
+                crate::nodes::NodeType::Concat => "concat",
+                crate::nodes::NodeType::Splitter => "splitter",
+                crate::nodes::NodeType::Postit => "postit",
+                crate::nodes::NodeType::Compare => "compare",
+                crate::nodes::NodeType::Composition => "composition",
+                crate::nodes::NodeType::Router => "router",
+                crate::nodes::NodeType::Batch => "batch",
+                crate::nodes::NodeType::Title => "title",
+                crate::nodes::NodeType::Omni => "omni",
+                crate::nodes::NodeType::Llm => "llm",
+                crate::nodes::NodeType::Video => "video",
+                crate::nodes::NodeType::Upscaler => "upscaler",
+                crate::nodes::NodeType::Vector => "vector",
+                crate::nodes::NodeType::Rodin3d => "rodin3d",
+                crate::nodes::NodeType::MindMap => "mind-map",
+                _ => "image",
+            };
+            
+            let data = self.node_to_react_data(node);
+            
+            nodes.push(serde_json::json!({
+                "id": id.to_string(),
+                "type": node_type,
+                "position": {
+                    "x": node.position.x,
+                    "y": node.position.y
+                },
+                "data": data
+            }));
+        }
+        
+        // Convert connections to edges
+        for conn in &self.graph.connections {
+            edges.push(serde_json::json!({
+                "id": format!("e{}-{}", conn.from_node, conn.to_node),
+                "source": conn.from_node.to_string(),
+                "target": conn.to_node.to_string(),
+                "sourceHandle": format!("output-{}", conn.from_slot),
+                "targetHandle": format!("input-{}", conn.to_slot)
+            }));
+        }
+        
+        serde_json::json!({
+            "nodes": nodes,
+            "edges": edges
+        })
+    }
+    
+    /// Convert node properties to React Flow data format
+    fn node_to_react_data(&self, node: &crate::nodes::Node) -> serde_json::Value {
+        match &node.properties {
+            crate::nodes::NodeProperties::Adjust { 
+                brightness, contrast, saturation, exposure,
+                highlights, shadows, temperature, tint,
+                vibrance, gamma, ..
+            } => {
+                serde_json::json!({
+                    "settings": {
+                        "brightness": brightness,
+                        "contrast": contrast,
+                        "saturation": saturation,
+                        "exposure": exposure,
+                        "highlights": highlights,
+                        "shadows": shadows,
+                        "temperature": temperature,
+                        "tint": tint,
+                        "vibrance": vibrance,
+                        "gamma": gamma
+                    }
+                })
+            }
+            crate::nodes::NodeProperties::Effects {
+                gaussian_blur, sharpen, grain, vignette,
+                directional_blur, directional_blur_angle,
+                progressive_blur, progressive_blur_direction, progressive_blur_falloff,
+                glass_blinds, glass_blinds_frequency, glass_blinds_angle, glass_blinds_phase,
+                grain_size, grain_monochrome, grain_seed,
+                vignette_roundness, vignette_smoothness,
+            } => {
+                serde_json::json!({
+                    "settings": {
+                        "gaussianBlur": gaussian_blur,
+                        "sharpen": sharpen,
+                        "grain": grain,
+                        "grainSize": grain_size,
+                        "grainMonochrome": grain_monochrome,
+                        "grainSeed": grain_seed,
+                        "vignette": vignette,
+                        "vignetteRoundness": vignette_roundness,
+                        "vignetteSmoothness": vignette_smoothness,
+                        "directionalBlur": directional_blur,
+                        "directionalBlurAngle": directional_blur_angle,
+                        "progressiveBlur": progressive_blur,
+                        "progressiveBlurDirection": format!("{:?}", progressive_blur_direction),
+                        "progressiveBlurFalloff": progressive_blur_falloff,
+                        "glassBlinds": glass_blinds,
+                        "glassBlindsFrequency": glass_blinds_frequency,
+                        "glassBlindsAngle": glass_blinds_angle,
+                        "glassBlindsPhase": glass_blinds_phase
+                    }
+                })
+            }
+            crate::nodes::NodeProperties::Text { text } => {
+                serde_json::json!({ "text": text })
+            }
+            crate::nodes::NodeProperties::Omni { prompt, negative_prompt, model, .. } => {
+                serde_json::json!({
+                    "prompt": prompt,
+                    "negativePrompt": negative_prompt,
+                    "model": model
+                })
+            }
+            _ => serde_json::json!({})
+        }
+    }
+    
+    /// Check if cloud save completed
+    fn check_cloud_save(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if !self.cloud_save_pending {
+                return;
+            }
+            
+            if let Ok(result) = js_sys::eval("window.__flownode_save_result || ''") {
+                if let Some(result_str) = result.as_string() {
+                    if !result_str.is_empty() {
+                        self.cloud_save_pending = false;
+                        
+                        if result_str.starts_with("ok:") {
+                            let id = &result_str[3..];
+                            self.set_status(&format!("✓ Saved to cloud! ID: {}...", &id[..8.min(id.len())]));
+                            log::info!("Workflow saved with ID: {}", id);
+                        } else {
+                            self.set_status(&format!("✗ Save failed: {}", &result_str[6..]));
+                        }
+                        
+                        let _ = js_sys::eval("window.__flownode_save_result = null");
+                    }
+                }
+            }
         }
     }
     
@@ -621,8 +854,9 @@ impl FlowNodeApp {
 
 impl eframe::App for FlowNodeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Check for pending cloud load
+        // Check for pending cloud operations
         self.check_cloud_load();
+        self.check_cloud_save();
         
         // Top menu bar
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
@@ -679,6 +913,10 @@ impl eframe::App for FlowNodeApp {
                     ui.label(egui::RichText::new("☁️ Cloud").weak());
                     if ui.button("Load Test Workflow").clicked() {
                         self.load_from_cloud_test();
+                        ui.close_menu();
+                    }
+                    if ui.button("💾 Save to Cloud (New)").clicked() {
+                        self.save_to_cloud_new();
                         ui.close_menu();
                     }
                     ui.separator();

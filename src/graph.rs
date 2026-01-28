@@ -38,8 +38,8 @@ pub struct Connection {
 /// The entire node graph
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NodeGraph {
-    nodes: HashMap<Uuid, Node>,
-    connections: Vec<Connection>,
+    pub nodes: HashMap<Uuid, Node>,
+    pub connections: Vec<Connection>,
     
     #[serde(skip)]
     selected_node: Option<Uuid>,
