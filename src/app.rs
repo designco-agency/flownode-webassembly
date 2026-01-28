@@ -319,6 +319,12 @@ impl eframe::App for FlowNodeApp {
                             if ui.button("Noise").clicked() {
                                 self.graph.add_node(crate::nodes::NodeType::Noise);
                             }
+                            if ui.button("Invert").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Invert);
+                            }
+                            if ui.button("Grayscale").clicked() {
+                                self.graph.add_node(crate::nodes::NodeType::Grayscale);
+                            }
                         });
                     
                     egui::CollapsingHeader::new("🔀 Combine")

@@ -683,6 +683,16 @@ impl NodeGraph {
                 ui.checkbox(invert, "Invert Mask");
             }
             
+            NodeProperties::Invert {} => {
+                ui.label("Inverts all colors");
+                ui.label("No parameters");
+            }
+            
+            NodeProperties::Grayscale {} => {
+                ui.label("Converts to grayscale");
+                ui.label("Uses luminosity weighting");
+            }
+            
             NodeProperties::Output {} => {
                 ui.label("Final output node");
                 if ui.button("Export Image...").clicked() {

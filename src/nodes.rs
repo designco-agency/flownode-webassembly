@@ -20,6 +20,8 @@ pub enum NodeType {
     Blur,
     Sharpen,
     Noise,
+    Invert,
+    Grayscale,
     
     // Combine
     Blend,
@@ -42,6 +44,8 @@ impl NodeType {
             Self::Blur => "Blur",
             Self::Sharpen => "Sharpen",
             Self::Noise => "Noise",
+            Self::Invert => "Invert",
+            Self::Grayscale => "Grayscale",
             Self::Blend => "Blend",
             Self::Mask => "Mask",
             Self::Output => "Output",
@@ -54,7 +58,7 @@ impl NodeType {
         match self {
             Self::ImageInput | Self::Color | Self::Number => Color32::from_rgb(76, 175, 80), // Green
             Self::BrightnessContrast | Self::HueSaturation | Self::Levels => Color32::from_rgb(255, 152, 0), // Orange
-            Self::Blur | Self::Sharpen | Self::Noise => Color32::from_rgb(33, 150, 243), // Blue
+            Self::Blur | Self::Sharpen | Self::Noise | Self::Invert | Self::Grayscale => Color32::from_rgb(33, 150, 243), // Blue
             Self::Blend | Self::Mask => Color32::from_rgb(156, 39, 176), // Purple
             Self::Output => Color32::from_rgb(244, 67, 54), // Red
         }
@@ -84,6 +88,12 @@ impl NodeType {
                 SlotInfo::new("Image", SlotType::Image),
             ],
             Self::Noise => vec![
+                SlotInfo::new("Image", SlotType::Image),
+            ],
+            Self::Invert => vec![
+                SlotInfo::new("Image", SlotType::Image),
+            ],
+            Self::Grayscale => vec![
                 SlotInfo::new("Image", SlotType::Image),
             ],
             
@@ -116,6 +126,8 @@ impl NodeType {
             Self::Blur => vec![SlotInfo::new("Image", SlotType::Image)],
             Self::Sharpen => vec![SlotInfo::new("Image", SlotType::Image)],
             Self::Noise => vec![SlotInfo::new("Image", SlotType::Image)],
+            Self::Invert => vec![SlotInfo::new("Image", SlotType::Image)],
+            Self::Grayscale => vec![SlotInfo::new("Image", SlotType::Image)],
             
             Self::Blend => vec![SlotInfo::new("Image", SlotType::Image)],
             Self::Mask => vec![SlotInfo::new("Image", SlotType::Image)],
@@ -222,6 +234,8 @@ pub enum NodeProperties {
         amount: f32,
         monochrome: bool,
     },
+    Invert {},
+    Grayscale {},
     Blend {
         mode: BlendMode,
         opacity: f32,
@@ -244,6 +258,8 @@ impl NodeProperties {
             NodeType::Blur => Self::Blur { radius: 5.0, blur_type: BlurType::Gaussian },
             NodeType::Sharpen => Self::Sharpen { amount: 1.0, radius: 1.0 },
             NodeType::Noise => Self::Noise { amount: 0.1, monochrome: false },
+            NodeType::Invert => Self::Invert {},
+            NodeType::Grayscale => Self::Grayscale {},
             NodeType::Blend => Self::Blend { mode: BlendMode::Normal, opacity: 1.0 },
             NodeType::Mask => Self::Mask { invert: false },
             NodeType::Output => Self::Output {},

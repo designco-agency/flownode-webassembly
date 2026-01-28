@@ -168,6 +168,8 @@ fn node_type_to_string(node_type: &NodeType) -> String {
         NodeType::Blur => "image".to_string(),
         NodeType::Sharpen => "image".to_string(),
         NodeType::Noise => "image".to_string(),
+        NodeType::Invert => "image".to_string(),
+        NodeType::Grayscale => "image".to_string(),
         NodeType::Blend => "image".to_string(),
         NodeType::Mask => "image".to_string(),
         NodeType::Output => "image".to_string(),

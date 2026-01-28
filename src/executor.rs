@@ -163,6 +163,39 @@ impl Executor {
                 }
             }
             
+            NodeProperties::Invert {} => {
+                let input = self.get_input_image(graph, node_id)?;
+                if let Some(img) = input {
+                    let mut output = img.pixels.as_ref().clone();
+                    for chunk in output.chunks_exact_mut(4) {
+                        chunk[0] = 255 - chunk[0];
+                        chunk[1] = 255 - chunk[1];
+                        chunk[2] = 255 - chunk[2];
+                        // Keep alpha
+                    }
+                    NodeOutput::Image(ImageData::new(output, img.width, img.height))
+                } else {
+                    NodeOutput::None
+                }
+            }
+            
+            NodeProperties::Grayscale {} => {
+                let input = self.get_input_image(graph, node_id)?;
+                if let Some(img) = input {
+                    let mut output = img.pixels.as_ref().clone();
+                    for chunk in output.chunks_exact_mut(4) {
+                        let gray = (0.299 * chunk[0] as f32 + 0.587 * chunk[1] as f32 + 0.114 * chunk[2] as f32) as u8;
+                        chunk[0] = gray;
+                        chunk[1] = gray;
+                        chunk[2] = gray;
+                        // Keep alpha
+                    }
+                    NodeOutput::Image(ImageData::new(output, img.width, img.height))
+                } else {
+                    NodeOutput::None
+                }
+            }
+            
             NodeProperties::Output {} => {
                 // Output node just passes through
                 let input = self.get_input_image(graph, node_id)?;
