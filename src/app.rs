@@ -68,7 +68,7 @@ impl FlowNodeApp {
         
         cc.egui_ctx.set_style(style);
         
-        Self {
+        let mut app = Self {
             graph: NodeGraph::new(),
             show_properties: true,
             show_library: true,
@@ -83,7 +83,12 @@ impl FlowNodeApp {
             output_texture: None,
             clipboard: None,
             status_message: None,
-        }
+        };
+        
+        // Try to load saved workflow from local storage on startup
+        app.load_from_local_storage();
+        
+        app
     }
     
     /// Set a status message that auto-expires after 3 seconds
@@ -261,6 +266,65 @@ impl FlowNodeApp {
         if ctx.input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::G)) {
             self.run_graph(ctx);
         }
+        
+        // Ctrl+S = Save to local storage
+        if ctx.input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::S)) {
+            self.save_to_local_storage();
+        }
+    }
+    
+    /// Save workflow to browser's local storage
+    fn save_to_local_storage(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Ok(json) = self.graph.to_json() {
+                let js_code = format!(
+                    r#"
+                    try {{
+                        localStorage.setItem('flownode_workflow', `{}`);
+                        console.log('Saved workflow to localStorage');
+                    }} catch(e) {{
+                        console.error('Failed to save:', e);
+                    }}
+                    "#,
+                    json.replace('`', "\\`").replace("${", "\\${")
+                );
+                let _ = js_sys::eval(&js_code);
+                self.set_status("✓ Saved to browser storage");
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            log::info!("Local storage save only available in browser");
+            self.set_status("⚠ Save only available in browser");
+        }
+    }
+    
+    /// Load workflow from browser's local storage
+    fn load_from_local_storage(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let js_code = r#"
+                localStorage.getItem('flownode_workflow') || ''
+            "#;
+            if let Ok(result) = js_sys::eval(js_code) {
+                if let Some(json_str) = result.as_string() {
+                    if !json_str.is_empty() {
+                        match crate::graph::NodeGraph::from_json(&json_str) {
+                            Ok(graph) => {
+                                self.graph = graph;
+                                self.set_status("✓ Loaded from browser storage");
+                                log::info!("Loaded workflow from localStorage");
+                            }
+                            Err(e) => {
+                                log::error!("Failed to parse saved workflow: {:?}", e);
+                                self.set_status("⚠ Failed to load saved workflow");
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     
     /// Run the node graph and produce output
@@ -342,8 +406,17 @@ impl eframe::App for FlowNodeApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    if ui.button("💾 Save to Browser (Ctrl+S)").clicked() {
+                        self.save_to_local_storage();
+                        ui.close_menu();
+                    }
+                    if ui.button("📂 Load from Browser").clicked() {
+                        self.load_from_local_storage();
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Export Image...").clicked() {
-                        // TODO: Export
+                        self.export_output();
                         ui.close_menu();
                     }
                 });
