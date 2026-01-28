@@ -205,6 +205,20 @@ impl NodeGraph {
             }
         }
         
+        // Zoom with scroll wheel
+        let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll_delta != 0.0 {
+            let zoom_factor = 1.0 + scroll_delta * 0.001;
+            self.zoom = (self.zoom * zoom_factor).clamp(0.25, 4.0);
+        }
+        
+        // Pan with middle mouse button or Ctrl+drag
+        if response.dragged_by(egui::PointerButton::Middle) 
+            || (response.dragged() && ui.input(|i| i.modifiers.ctrl)) 
+        {
+            self.pan_offset += response.drag_delta();
+        }
+        
         // Cancel pending connection on right click or release without target
         if response.secondary_clicked() {
             self.pending_connection = None;
