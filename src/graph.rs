@@ -78,12 +78,14 @@ impl NodeGraph {
         let offset_x = (node_count * 30.0) % 200.0;
         let offset_y = (node_count * 20.0) % 150.0;
         let position = Pos2::new(
-            (300.0 + offset_x - self.pan_offset.x) / self.zoom,
-            (200.0 + offset_y - self.pan_offset.y) / self.zoom,
+            100.0 + offset_x,
+            100.0 + offset_y,
         );
+        log::info!("Creating node {:?} at {:?}", node_type, position);
         let node = Node::new(node_type, position);
         self.selected_node = Some(node.id);
         self.nodes.insert(node.id, node);
+        log::info!("Total nodes: {}", self.nodes.len());
     }
     
     /// Show the node graph in the UI
