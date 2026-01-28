@@ -6,6 +6,7 @@ use uuid::Uuid;
 use std::collections::HashMap;
 
 use crate::nodes::{Node, NodeType, NodeProperties, SlotType, BlurType, BlendMode};
+use crate::ui_components::{style, colors};
 
 /// A connection between two nodes
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,7 +111,7 @@ impl NodeGraph {
         }
         
         // Fill canvas with dark background
-        painter.rect_filled(canvas_rect, 0.0, egui::Color32::from_rgb(26, 26, 46));
+        painter.rect_filled(canvas_rect, 0.0, colors::CANVAS_BG);
         
         // Draw grid background
         self.draw_grid(&painter, canvas_rect);
@@ -154,8 +155,8 @@ impl NodeGraph {
     }
     
     fn draw_grid(&self, painter: &egui::Painter, rect: Rect) {
-        let grid_size = 20.0 * self.zoom;
-        let grid_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 15);
+        let grid_size = style::GRID_SIZE * self.zoom;
+        let grid_color = colors::GRID_LINE;
         
         let start_x = (rect.left() + self.pan_offset.x % grid_size) as i32;
         let start_y = (rect.top() + self.pan_offset.y % grid_size) as i32;
@@ -199,7 +200,7 @@ impl NodeGraph {
             })
             .collect();
         
-        painter.add(egui::Shape::line(points, egui::Stroke::new(3.0, color)));
+        painter.add(egui::Shape::line(points, egui::Stroke::new(style::CONNECTION_WIDTH, color)));
     }
     
     fn draw_node(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, canvas_rect: Rect, node_id: Uuid) {
@@ -208,10 +209,10 @@ impl NodeGraph {
             None => return,
         };
         
-        let node_width = 180.0 * self.zoom;
-        let header_height = 28.0 * self.zoom;
-        let slot_height = 24.0 * self.zoom;
-        let padding = 8.0 * self.zoom;
+        let node_width = style::NODE_WIDTH * self.zoom;
+        let header_height = style::NODE_HEADER_HEIGHT * self.zoom;
+        let slot_height = style::NODE_SLOT_HEIGHT * self.zoom;
+        let padding = style::NODE_PADDING * self.zoom;
         
         let inputs = node.node_type.inputs();
         let outputs = node.node_type.outputs();
@@ -234,29 +235,30 @@ impl NodeGraph {
         
         // Node background
         let bg_color = if is_selected {
-            egui::Color32::from_rgb(50, 50, 70)
+            colors::NODE_BG_SELECTED
         } else {
-            egui::Color32::from_rgb(40, 40, 55)
+            colors::NODE_BG
         };
         
-        painter.rect_filled(node_rect, 8.0 * self.zoom, bg_color);
+        painter.rect_filled(node_rect, style::NODE_ROUNDING * self.zoom, bg_color);
         
         // Selection outline
         if is_selected {
             painter.rect_stroke(
                 node_rect,
-                8.0 * self.zoom,
-                egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 149, 237)),
+                style::NODE_ROUNDING * self.zoom,
+                egui::Stroke::new(2.0, colors::NODE_SELECTED_OUTLINE),
             );
         }
         
         // Header
         let header_rect = Rect::from_min_size(node_pos, Vec2::new(node_width, header_height));
+        let rounding = style::NODE_ROUNDING * self.zoom;
         painter.rect_filled(
             header_rect,
             egui::Rounding {
-                nw: 8.0 * self.zoom,
-                ne: 8.0 * self.zoom,
+                nw: rounding,
+                ne: rounding,
                 sw: 0.0,
                 se: 0.0,
             },
@@ -280,7 +282,7 @@ impl NodeGraph {
             );
             
             // Slot circle
-            painter.circle_filled(slot_pos, 6.0 * self.zoom, input.slot_type.color());
+            painter.circle_filled(slot_pos, style::SLOT_RADIUS * self.zoom, input.slot_type.color());
             
             // Slot label
             painter.text(
@@ -300,7 +302,7 @@ impl NodeGraph {
             );
             
             // Slot circle
-            painter.circle_filled(slot_pos, 6.0 * self.zoom, output.slot_type.color());
+            painter.circle_filled(slot_pos, style::SLOT_RADIUS * self.zoom, output.slot_type.color());
             
             // Slot label
             painter.text(
@@ -335,10 +337,10 @@ impl NodeGraph {
     }
     
     fn get_slot_position(&self, node: &Node, slot_index: usize, is_input: bool, canvas_rect: Rect) -> Pos2 {
-        let node_width = 180.0 * self.zoom;
-        let header_height = 28.0 * self.zoom;
-        let slot_height = 24.0 * self.zoom;
-        let padding = 8.0 * self.zoom;
+        let node_width = style::NODE_WIDTH * self.zoom;
+        let header_height = style::NODE_HEADER_HEIGHT * self.zoom;
+        let slot_height = style::NODE_SLOT_HEIGHT * self.zoom;
+        let padding = style::NODE_PADDING * self.zoom;
         
         let node_pos = Pos2::new(
             canvas_rect.left() + node.position.x * self.zoom + self.pan_offset.x,
